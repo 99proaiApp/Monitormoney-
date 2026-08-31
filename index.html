@@ -19,7 +19,7 @@
 
 <div id="toast-container"></div>
 
-<!-- ===== CONFIRM MODAL (generic, reused for every save/import/delete) ===== -->
+<!-- ===== CONFIRM MODAL ===== -->
 <div class="modal-overlay" id="confirmModal">
   <div class="modal-box glass">
     <h3 id="confirmTitle">ยืนยันการทำรายการ</h3>
@@ -91,6 +91,11 @@
       <h2>📈 กราฟรายรับ–รายจ่าย</h2>
       <button class="close-x" data-close="chartPanel">✕</button>
     </div>
+    <div class="period-toggle chart-type-toggle">
+      <button class="period-btn active" data-charttype="bar">📊 แท่ง</button>
+      <button class="period-btn" data-charttype="line">📈 เส้น</button>
+      <button class="period-btn" data-charttype="pie">🥧 วงกลม</button>
+    </div>
     <div class="period-toggle chart-period-toggle">
       <button class="period-btn active" data-chartperiod="day">รายวัน</button>
       <button class="period-btn" data-chartperiod="week">รายสัปดาห์</button>
@@ -98,8 +103,8 @@
       <button class="period-btn" data-chartperiod="year">รายปี</button>
     </div>
     <div class="chart-legend">
-      <span><i class="dot income"></i> รายรับ</span>
-      <span><i class="dot expense"></i> รายจ่าย</span>
+      <span><i class="dot income"></i> รายรับ <b id="legendIncome">0</b></span>
+      <span><i class="dot expense"></i> รายจ่าย <b id="legendExpense">0</b></span>
     </div>
     <canvas id="chartCanvas" width="600" height="320"></canvas>
   </div>
@@ -139,13 +144,13 @@
     <button id="dateToday" class="today-pill">วันนี้</button>
   </section>
 
-  <!-- ===== MONTHLY INCOME MINI CARD ===== -->
+  <!-- ===== MONTHLY NET MINI CARD ===== -->
   <section class="mini-card glass">
     <span class="mini-icon">📅</span>
     <div class="mini-text">
-      <span class="mini-label">รายได้ทั้งหมด (เดือนนี้)</span>
-      <span class="mini-value" id="cardMonthlyIncome">฿0.00</span>
-      <span class="mini-caption" id="monthlyIncomeCaption">รวมรายรับทุกวันของเดือนสิงหาคม 2569</span>
+      <span class="mini-label">รายได้สุทธิ (เดือนนี้)</span>
+      <span class="mini-value" id="cardMonthlyNet">฿0.00</span>
+      <span class="mini-caption" id="monthlyNetCaption">รวมรายรับหักรายจ่ายและเงินทอน ของเดือนสิงหาคม 2569</span>
     </div>
   </section>
 
@@ -153,50 +158,29 @@
   <section class="hero-card glass">
     <div class="hero-stat">
       <div class="hero-icon-label income"><span class="hero-icon">↗</span> รายรับแท้จริง</div>
-      <div class="hero-number income zoomable" id="cardIncomeReal">0</div>
+      <div class="hero-number income zoomable floaty" id="cardIncomeReal">0</div>
       <div class="hero-unit">บาท</div>
     </div>
     <div class="hero-divider"></div>
     <div class="hero-stat">
       <div class="hero-icon-label expense"><span class="hero-icon">↘</span> รายจ่าย</div>
-      <div class="hero-number expense" id="cardExpense">0</div>
+      <div class="hero-number expense zoomable floaty" id="cardExpense">0</div>
       <div class="hero-unit">บาท</div>
     </div>
     <div class="hero-divider"></div>
     <div class="hero-stat">
       <div class="hero-icon-label net"><span class="hero-icon">💳</span> สุทธิ</div>
-      <div class="hero-number net zoomable" id="cardNet">0</div>
+      <div class="hero-number net zoomable floaty-net" id="cardNet">0</div>
       <div class="hero-unit">บาท</div>
     </div>
     <div class="hero-caption" id="heroCaption">เงินทอน 0 ฿ — (รายรับ 0 – 0 = รายรับแท้จริง 0 ฿)</div>
   </section>
 
-  <!-- ===== FORM 1: ยอดเงินหมุนเวียน ===== -->
-  <section class="form-card glass" data-card="opening">
-    <div class="card-header">
-      <div class="card-header-left">
-        <span class="step-tab">1</span>
-        <h2>ยอดเงินหมุนเวียน</h2>
-      </div>
-      <button class="chevron-btn" aria-label="ย่อ/ขยาย"><svg viewBox="0 0 24 24"><polyline points="6 9 12 15 18 9"/></svg></button>
-    </div>
-    <div class="card-body">
-      <div class="field-row">
-        <label>ยอดตั้งต้นของวันนี้ (บาท)</label>
-        <div class="field-with-btn">
-          <input type="number" id="openingCash" step="0.01" placeholder="0.00">
-          <button class="ghost-btn" id="useYesterday">ใช้ยอดเมื่อวาน</button>
-        </div>
-      </div>
-      <button class="save-btn" data-save="opening">✓ บันทึกยอดเงินหมุนเวียน</button>
-    </div>
-  </section>
-
-  <!-- ===== FORM 2: รายรับ ===== -->
+  <!-- ===== FORM 1: รายรับ ===== -->
   <section class="form-card glass" data-card="income">
     <div class="card-header">
       <div class="card-header-left">
-        <span class="step-tab">2</span>
+        <span class="step-tab">1</span>
         <h2>รายรับ</h2>
         <span class="chip income-chip" id="chipIncome">0 ฿</span>
       </div>
@@ -223,11 +207,11 @@
     </div>
   </section>
 
-  <!-- ===== FORM 3: รายจ่าย ===== -->
+  <!-- ===== FORM 2: รายจ่าย ===== -->
   <section class="form-card glass" data-card="expense">
     <div class="card-header">
       <div class="card-header-left">
-        <span class="step-tab">3</span>
+        <span class="step-tab">2</span>
         <h2>รายจ่าย</h2>
         <span class="chip expense-chip" id="chipExpense">0 ฿</span>
       </div>
@@ -262,17 +246,18 @@
     </div>
   </section>
 
-  <!-- ===== FORM 4: เงินทอน ===== -->
+  <!-- ===== FORM 3: เงินทอน (รวม เงินทอน + เงินทอนยกมา) ===== -->
   <section class="form-card glass" data-card="change">
     <div class="card-header">
       <div class="card-header-left">
-        <span class="step-tab">4</span>
+        <span class="step-tab">3</span>
         <h2>เงินทอน</h2>
         <span class="chip change-chip" id="chipChange">0 ฿</span>
       </div>
       <button class="chevron-btn" aria-label="ย่อ/ขยาย"><svg viewBox="0 0 24 24"><polyline points="6 9 12 15 18 9"/></svg></button>
     </div>
     <div class="card-body">
+      <p class="sub-note">เงินทอนที่จ่ายให้ลูกค้าของวันที่ <span id="carryDateLabel">-</span></p>
       <div class="row-item">
         <span class="row-icon">🪙</span><span class="row-label">เงินทอน (เหรียญ)</span>
         <input type="number" id="changeCoin" step="0.01" placeholder="0" class="row-input">
@@ -283,35 +268,9 @@
         <input type="number" id="changeNote" step="0.01" placeholder="0" class="row-input">
         <span class="row-unit">฿</span>
       </div>
+      <button class="ghost-btn full" id="useYesterdayChange">↩️ ใช้ยอดเงินทอนของเมื่อวาน</button>
       <div class="total-line">รวมเงินทอนวันนี้: <span id="changeTotal">฿0.00</span></div>
       <button class="save-btn" data-save="change">✓ บันทึกเงินทอน</button>
-    </div>
-  </section>
-
-  <!-- ===== FORM 5: เงินทอนยกมา ===== -->
-  <section class="form-card glass" data-card="carry">
-    <div class="card-header">
-      <div class="card-header-left">
-        <span class="step-tab">5</span>
-        <h2>เงินทอนยกมา</h2>
-        <span class="chip carry-chip" id="chipCarry">0 ฿</span>
-      </div>
-      <button class="chevron-btn" aria-label="ย่อ/ขยาย"><svg viewBox="0 0 24 24"><polyline points="6 9 12 15 18 9"/></svg></button>
-    </div>
-    <div class="card-body">
-      <p class="sub-note">ของวันที่ <span id="carryDateLabel">-</span></p>
-      <div class="row-item">
-        <span class="row-icon">🪙</span><span class="row-label">เงินทอนยกมา (เหรียญ)</span>
-        <input type="number" id="carryCoin" step="0.01" placeholder="0" class="row-input">
-        <span class="row-unit">฿</span>
-      </div>
-      <div class="row-item">
-        <span class="row-icon">💵</span><span class="row-label">เงินทอนยกมา (แบงค์)</span>
-        <input type="number" id="carryNote" step="0.01" placeholder="0" class="row-input">
-        <span class="row-unit">฿</span>
-      </div>
-      <div class="total-line">รวมเงินทอนยกมา: <span id="carryTotal">฿0.00</span></div>
-      <button class="save-btn" data-save="carry">✓ บันทึกเงินทอนยกมา</button>
     </div>
   </section>
 
