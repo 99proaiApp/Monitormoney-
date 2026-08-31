@@ -3,247 +3,336 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>บัญชีรายรับ-รายจ่าย | สมุดเงินสด</title>
+<title>สมุดเงินสด | บัญชีรายรับ-รายจ่าย</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Thai:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500;600;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Thai:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@500;600;700&display=swap" rel="stylesheet">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
 
+<div class="bg-blob b1"></div>
+<div class="bg-blob b2"></div>
+<div class="bg-blob b3"></div>
+
 <div id="toast-container"></div>
 
+<!-- ===== CONFIRM MODAL (generic, reused for every save/import/delete) ===== -->
+<div class="modal-overlay" id="confirmModal">
+  <div class="modal-box glass">
+    <h3 id="confirmTitle">ยืนยันการทำรายการ</h3>
+    <p id="confirmMessage">คุณแน่ใจหรือไม่?</p>
+    <div class="modal-actions">
+      <button class="modal-btn ghost" id="confirmCancel">ยกเลิก</button>
+      <button class="modal-btn primary" id="confirmOk">ยืนยัน</button>
+    </div>
+  </div>
+</div>
+
 <!-- ===== HEADER ===== -->
-<header class="topbar">
+<header class="topbar glass">
   <div class="brand">
     <span class="brand-mark">฿</span>
     <div class="brand-text">
-      <h1>สมุดเงินสด</h1>
-      <p>บัญชีรายรับ–รายจ่ายประจำวัน</p>
+      <h1 id="appTitle" contenteditable="true" spellcheck="false">สมุดเงินสด</h1>
+      <p>บัญชีรายรับ–รายจ่ายประจำวัน · แตะชื่อเพื่อแก้ไข</p>
     </div>
   </div>
   <div class="icon-actions">
+    <button class="icon-btn" id="btnHistory" title="ประวัติ" aria-label="ประวัติ">
+      <svg viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 4v5h5"/><path d="M12 7v5l3 3"/></svg>
+    </button>
     <button class="icon-btn" id="btnSearch" title="ค้นหา" aria-label="ค้นหา">
       <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
     </button>
     <button class="icon-btn" id="btnChart" title="กราฟ" aria-label="กราฟ">
       <svg viewBox="0 0 24 24"><line x1="4" y1="20" x2="4" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="20" y1="20" x2="20" y2="14"/></svg>
     </button>
-    <button class="icon-btn" id="btnDownload" title="ดาวน์โหลด / นำเข้า" aria-label="ดาวน์โหลด">
+    <button class="icon-btn" id="btnDownload" title="ส่งออก / นำเข้า" aria-label="ส่งออก / นำเข้า">
       <svg viewBox="0 0 24 24"><path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M4 20h16"/></svg>
     </button>
   </div>
 </header>
 
-<!-- ===== DOWNLOAD MENU ===== -->
-<div class="dropdown-panel" id="downloadPanel">
-  <button id="exportExcel">📊 Export เป็น Excel (.xlsx)</button>
-  <button id="exportCsv">📄 Export เป็น CSV</button>
-  <button id="importCsvBtn">📥 Import CSV</button>
+<!-- ===== DOWNLOAD / IMPORT / BACKUP MENU ===== -->
+<div class="float-panel glass" id="downloadPanel">
+  <div class="dd-section-label">📤 Export Data — ส่งออกข้อมูล</div>
+  <button id="exportExcel">📊 Excel (.xlsx)</button>
+  <button id="exportCsv">📄 CSV</button>
+  <button id="exportPdfDay">🧾 PDF ใบสรุปรายวัน</button>
+  <button id="exportPdfPeriod">📑 PDF รายงานสรุปช่วงเวลา</button>
+  <div class="dd-section-label">📥 Import Data — นำเข้าข้อมูล</div>
+  <button id="importCsvBtn">นำเข้า CSV (รวมข้อมูลอัตโนมัติ)</button>
+  <div class="dd-section-label">🗂️ Backup / Restore — สำรอง/คืนค่า</div>
+  <button id="exportJson">สำรองข้อมูลทั้งหมด (.json)</button>
+  <button id="importJsonBtn">คืนค่าข้อมูลจากไฟล์ (.json)</button>
   <input type="file" id="importCsvInput" accept=".csv" hidden>
+  <input type="file" id="importJsonInput" accept=".json" hidden>
 </div>
 
 <!-- ===== SEARCH PANEL ===== -->
 <div class="overlay-panel" id="searchPanel">
-  <div class="panel-head">
-    <h2>ค้นหารายการ</h2>
-    <button class="close-x" data-close="searchPanel">✕</button>
+  <div class="float-panel glass panel-inner">
+    <div class="panel-head">
+      <h2>🔍 ค้นหารายการ</h2>
+      <button class="close-x" data-close="searchPanel">✕</button>
+    </div>
+    <input type="text" id="searchInput" placeholder="พิมพ์คำค้นหา เช่น ชื่อของ, หมวดหมู่, วันที่ (YYYY-MM-DD)">
+    <div id="searchResults" class="search-results"></div>
   </div>
-  <input type="text" id="searchInput" placeholder="พิมพ์คำค้นหา เช่น ชื่อของ, หมวดหมู่, วันที่ (YYYY-MM-DD)">
-  <div id="searchResults" class="search-results"></div>
 </div>
 
 <!-- ===== CHART PANEL ===== -->
 <div class="overlay-panel" id="chartPanel">
-  <div class="panel-head">
-    <h2>กราฟรายรับ–รายจ่าย 7 วันล่าสุด</h2>
-    <button class="close-x" data-close="chartPanel">✕</button>
+  <div class="float-panel glass panel-inner">
+    <div class="panel-head">
+      <h2>📈 กราฟรายรับ–รายจ่าย</h2>
+      <button class="close-x" data-close="chartPanel">✕</button>
+    </div>
+    <div class="period-toggle chart-period-toggle">
+      <button class="period-btn active" data-chartperiod="day">รายวัน</button>
+      <button class="period-btn" data-chartperiod="week">รายสัปดาห์</button>
+      <button class="period-btn" data-chartperiod="month">รายเดือน</button>
+      <button class="period-btn" data-chartperiod="year">รายปี</button>
+    </div>
+    <div class="chart-legend">
+      <span><i class="dot income"></i> รายรับ</span>
+      <span><i class="dot expense"></i> รายจ่าย</span>
+    </div>
+    <canvas id="chartCanvas" width="600" height="320"></canvas>
   </div>
-  <div class="chart-legend">
-    <span><i class="dot income"></i> รายรับ</span>
-    <span><i class="dot expense"></i> รายจ่าย</span>
+</div>
+
+<!-- ===== HISTORY PANEL ===== -->
+<div class="overlay-panel" id="historyPanel">
+  <div class="float-panel glass panel-inner">
+    <div class="panel-head">
+      <h2>🕘 ประวัติข้อมูล</h2>
+      <button class="close-x" data-close="historyPanel">✕</button>
+    </div>
+    <div class="history-filter">
+      <select id="historyYear"></select>
+      <select id="historyMonth">
+        <option value="all">ทุกเดือน</option>
+        <option value="0">มกราคม</option><option value="1">กุมภาพันธ์</option><option value="2">มีนาคม</option>
+        <option value="3">เมษายน</option><option value="4">พฤษภาคม</option><option value="5">มิถุนายน</option>
+        <option value="6">กรกฎาคม</option><option value="7">สิงหาคม</option><option value="8">กันยายน</option>
+        <option value="9">ตุลาคม</option><option value="10">พฤศจิกายน</option><option value="11">ธันวาคม</option>
+      </select>
+    </div>
+    <div id="historyList" class="history-list"></div>
   </div>
-  <canvas id="chartCanvas" width="600" height="320"></canvas>
 </div>
 
 <main class="app-main">
 
   <!-- ===== DATE SELECTOR ===== -->
-  <section class="date-bar">
+  <section class="date-bar glass">
     <button id="dateBack" class="date-nav" aria-label="วันก่อนหน้า">‹</button>
     <div class="date-display">
       <input type="date" id="activeDate">
       <span id="dayName" class="day-name">วันจันทร์</span>
     </div>
     <button id="dateFwd" class="date-nav" aria-label="วันถัดไป">›</button>
+    <button id="dateToday" class="today-pill">วันนี้</button>
   </section>
 
-  <!-- ===== SUMMARY CARDS (STRIP) ===== -->
-  <section class="card-strip" id="cardStrip">
-    <div class="sum-card circulating">
-      <span class="sum-label">1. ยอดเงินหมุนเวียน</span>
-      <span class="sum-value" id="cardCirculating">฿0.00</span>
+  <!-- ===== MONTHLY INCOME MINI CARD ===== -->
+  <section class="mini-card glass">
+    <span class="mini-icon">📅</span>
+    <div class="mini-text">
+      <span class="mini-label">รายได้ทั้งหมด (เดือนนี้)</span>
+      <span class="mini-value" id="cardMonthlyIncome">฿0.00</span>
+      <span class="mini-caption" id="monthlyIncomeCaption">รวมรายรับทุกวันของเดือนสิงหาคม 2569</span>
     </div>
-    <div class="sum-card income">
-      <span class="sum-label">2. รายรับ</span>
-      <span class="sum-value" id="cardIncome">฿0.00</span>
+  </section>
+
+  <!-- ===== HERO STATS CARD ===== -->
+  <section class="hero-card glass">
+    <div class="hero-stat">
+      <div class="hero-icon-label income"><span class="hero-icon">↗</span> รายรับแท้จริง</div>
+      <div class="hero-number income zoomable" id="cardIncomeReal">0</div>
+      <div class="hero-unit">บาท</div>
     </div>
-    <div class="sum-card expense">
-      <span class="sum-label">3. รายจ่าย</span>
-      <span class="sum-value" id="cardExpense">฿0.00</span>
+    <div class="hero-divider"></div>
+    <div class="hero-stat">
+      <div class="hero-icon-label expense"><span class="hero-icon">↘</span> รายจ่าย</div>
+      <div class="hero-number expense" id="cardExpense">0</div>
+      <div class="hero-unit">บาท</div>
     </div>
-    <div class="sum-card change">
-      <span class="sum-label">4. เงินทอน</span>
-      <span class="sum-value" id="cardChange">฿0.00</span>
+    <div class="hero-divider"></div>
+    <div class="hero-stat">
+      <div class="hero-icon-label net"><span class="hero-icon">💳</span> สุทธิ</div>
+      <div class="hero-number net zoomable" id="cardNet">0</div>
+      <div class="hero-unit">บาท</div>
     </div>
-    <div class="sum-card net" id="cardNetWrap">
-      <span class="sum-label">5. ยอดสุทธิประจำวัน</span>
-      <span class="sum-value zoomable" id="cardNet">฿0.00</span>
-    </div>
+    <div class="hero-caption" id="heroCaption">เงินทอน 0 ฿ — (รายรับ 0 – 0 = รายรับแท้จริง 0 ฿)</div>
   </section>
 
   <!-- ===== FORM 1: ยอดเงินหมุนเวียน ===== -->
-  <section class="form-card">
-    <div class="form-head">
-      <span class="step-tab">1</span>
-      <h2>ยอดเงินหมุนเวียน</h2>
-    </div>
-    <div class="field-row">
-      <label>ยอดตั้งต้นของวันนี้ (บาท)</label>
-      <div class="field-with-btn">
-        <input type="number" id="openingCash" step="0.01" placeholder="0.00">
-        <button class="ghost-btn" id="useYesterday">ใช้ยอดเมื่อวาน</button>
+  <section class="form-card glass" data-card="opening">
+    <div class="card-header">
+      <div class="card-header-left">
+        <span class="step-tab">1</span>
+        <h2>ยอดเงินหมุนเวียน</h2>
       </div>
+      <button class="chevron-btn" aria-label="ย่อ/ขยาย"><svg viewBox="0 0 24 24"><polyline points="6 9 12 15 18 9"/></svg></button>
     </div>
-    <button class="save-btn" data-save="opening">บันทึกยอดเงินหมุนเวียน</button>
+    <div class="card-body">
+      <div class="field-row">
+        <label>ยอดตั้งต้นของวันนี้ (บาท)</label>
+        <div class="field-with-btn">
+          <input type="number" id="openingCash" step="0.01" placeholder="0.00">
+          <button class="ghost-btn" id="useYesterday">ใช้ยอดเมื่อวาน</button>
+        </div>
+      </div>
+      <button class="save-btn" data-save="opening">✓ บันทึกยอดเงินหมุนเวียน</button>
+    </div>
   </section>
 
   <!-- ===== FORM 2: รายรับ ===== -->
-  <section class="form-card">
-    <div class="form-head">
-      <span class="step-tab">2</span>
-      <h2>รายรับ</h2>
+  <section class="form-card glass" data-card="income">
+    <div class="card-header">
+      <div class="card-header-left">
+        <span class="step-tab">2</span>
+        <h2>รายรับ</h2>
+        <span class="chip income-chip" id="chipIncome">0 ฿</span>
+      </div>
+      <button class="chevron-btn" aria-label="ย่อ/ขยาย"><svg viewBox="0 0 24 24"><polyline points="6 9 12 15 18 9"/></svg></button>
     </div>
-    <div class="field-grid">
-      <div class="field-row">
-        <label>💵 รายรับ (แบงค์)</label>
-        <input type="number" id="incomeNote" step="0.01" placeholder="0.00">
+    <div class="card-body">
+      <div class="row-item">
+        <span class="row-icon">💵</span><span class="row-label">เงินแบงค์</span>
+        <input type="number" id="incomeNote" step="0.01" placeholder="0" class="row-input">
+        <span class="row-unit">฿</span>
       </div>
-      <div class="field-row">
-        <label>🪙 รายรับ (เหรียญ)</label>
-        <input type="number" id="incomeCoin" step="0.01" placeholder="0.00">
+      <div class="row-item">
+        <span class="row-icon">🪙</span><span class="row-label">เงินเหรียญ</span>
+        <input type="number" id="incomeCoin" step="0.01" placeholder="0" class="row-input">
+        <span class="row-unit">฿</span>
       </div>
-      <div class="field-row">
-        <label>📱 รายรับ (App ถุงเงิน)</label>
-        <input type="number" id="incomeApp" step="0.01" placeholder="0.00">
+      <div class="row-item">
+        <span class="row-icon">📱</span><span class="row-label">App / โอน (ถุงเงิน)</span>
+        <input type="number" id="incomeApp" step="0.01" placeholder="0" class="row-input">
+        <span class="row-unit">฿</span>
       </div>
+      <div class="total-line">รวม: <span id="incomeTotal">฿0.00</span></div>
+      <button class="save-btn" data-save="income">✓ บันทึกรายรับ</button>
     </div>
-    <div class="total-line">👉 รวมรายรับ: <span id="incomeTotal">฿0.00</span></div>
-    <button class="save-btn" data-save="income">บันทึกรายรับ</button>
   </section>
 
   <!-- ===== FORM 3: รายจ่าย ===== -->
-  <section class="form-card">
-    <div class="form-head">
-      <span class="step-tab">3</span>
-      <h2>รายจ่าย</h2>
+  <section class="form-card glass" data-card="expense">
+    <div class="card-header">
+      <div class="card-header-left">
+        <span class="step-tab">3</span>
+        <h2>รายจ่าย</h2>
+        <span class="chip expense-chip" id="chipExpense">0 ฿</span>
+      </div>
+      <button class="chevron-btn" aria-label="ย่อ/ขยาย"><svg viewBox="0 0 24 24"><polyline points="6 9 12 15 18 9"/></svg></button>
     </div>
-    <div id="expenseList" class="expense-list"></div>
-    <div class="field-grid expense-input-row">
-      <div class="field-row">
-        <label>รายการ</label>
-        <input type="text" id="expenseDesc" placeholder="เช่น ซื้อน้ำแข็ง">
+    <div class="card-body">
+      <div id="expenseList" class="expense-list"></div>
+      <div class="field-grid expense-input-row">
+        <div class="field-row">
+          <label>รายการ</label>
+          <input type="text" id="expenseDesc" placeholder="เช่น ซื้อน้ำแข็ง">
+        </div>
+        <div class="field-row">
+          <label>หมวดหมู่</label>
+          <select id="expenseCategory">
+            <option value="อาหาร">อาหาร</option>
+            <option value="เดินทาง">เดินทาง</option>
+            <option value="ของใช้">ของใช้</option>
+            <option value="ค่าน้ำ-ไฟ">ค่าน้ำ-ไฟ</option>
+            <option value="อื่นๆ">อื่นๆ</option>
+            <option value="__custom">✏️ พิมพ์เอง...</option>
+          </select>
+          <input type="text" id="expenseCategoryCustom" placeholder="พิมพ์หมวดหมู่เอง" hidden>
+        </div>
+        <div class="field-row">
+          <label>จำนวนเงิน</label>
+          <input type="number" id="expenseAmount" step="0.01" placeholder="0.00">
+        </div>
       </div>
-      <div class="field-row">
-        <label>หมวดหมู่</label>
-        <select id="expenseCategory">
-          <option value="อาหาร">อาหาร</option>
-          <option value="เดินทาง">เดินทาง</option>
-          <option value="ของใช้">ของใช้</option>
-          <option value="ค่าน้ำ-ไฟ">ค่าน้ำ-ไฟ</option>
-          <option value="อื่นๆ">อื่นๆ</option>
-          <option value="__custom">✏️ พิมพ์เอง...</option>
-        </select>
-        <input type="text" id="expenseCategoryCustom" placeholder="พิมพ์หมวดหมู่เอง" hidden>
-      </div>
-      <div class="field-row">
-        <label>จำนวนเงิน</label>
-        <input type="number" id="expenseAmount" step="0.01" placeholder="0.00">
-      </div>
+      <button class="ghost-btn full" id="addExpenseBtn">+ เพิ่มรายการรายจ่าย</button>
+      <div class="total-line">รวมรายจ่ายทั้งหมด: <span id="expenseTotal">฿0.00</span></div>
     </div>
-    <button class="ghost-btn full" id="addExpenseBtn">+ เพิ่มรายการรายจ่าย</button>
-    <div class="total-line">👉 รวมรายจ่ายทั้งหมด: <span id="expenseTotal">฿0.00</span></div>
   </section>
 
   <!-- ===== FORM 4: เงินทอน ===== -->
-  <section class="form-card">
-    <div class="form-head">
-      <span class="step-tab">4</span>
-      <h2>เงินทอน</h2>
-    </div>
-    <div class="field-grid">
-      <div class="field-row">
-        <label>🪙 เงินทอน (เหรียญ)</label>
-        <input type="number" id="changeCoin" step="0.01" placeholder="0.00">
+  <section class="form-card glass" data-card="change">
+    <div class="card-header">
+      <div class="card-header-left">
+        <span class="step-tab">4</span>
+        <h2>เงินทอน</h2>
+        <span class="chip change-chip" id="chipChange">0 ฿</span>
       </div>
-      <div class="field-row">
-        <label>💵 เงินทอน (แบงค์)</label>
-        <input type="number" id="changeNote" step="0.01" placeholder="0.00">
-      </div>
+      <button class="chevron-btn" aria-label="ย่อ/ขยาย"><svg viewBox="0 0 24 24"><polyline points="6 9 12 15 18 9"/></svg></button>
     </div>
-    <div class="total-line">👉 รวมเงินทอนวันนี้: <span id="changeTotal">฿0.00</span></div>
-    <button class="save-btn" data-save="change">บันทึกเงินทอน</button>
+    <div class="card-body">
+      <div class="row-item">
+        <span class="row-icon">🪙</span><span class="row-label">เงินทอน (เหรียญ)</span>
+        <input type="number" id="changeCoin" step="0.01" placeholder="0" class="row-input">
+        <span class="row-unit">฿</span>
+      </div>
+      <div class="row-item">
+        <span class="row-icon">💵</span><span class="row-label">เงินทอน (แบงค์)</span>
+        <input type="number" id="changeNote" step="0.01" placeholder="0" class="row-input">
+        <span class="row-unit">฿</span>
+      </div>
+      <div class="total-line">รวมเงินทอนวันนี้: <span id="changeTotal">฿0.00</span></div>
+      <button class="save-btn" data-save="change">✓ บันทึกเงินทอน</button>
+    </div>
   </section>
 
-  <!-- ===== FORM 5: ยอดสุทธิประจำวัน ===== -->
-  <section class="form-card receipt-card">
-    <div class="form-head">
-      <span class="step-tab">5</span>
-      <h2>ยอดสุทธิประจำวัน</h2>
-    </div>
-    <div class="receipt">
-      <div class="receipt-row"><span>รายรับรวม</span><span id="rIncome">฿0.00</span></div>
-      <div class="receipt-row"><span>หัก รายจ่ายรวม</span><span id="rExpense">-฿0.00</span></div>
-      <div class="receipt-dash"></div>
-      <div class="receipt-row total"><span>ยอดสุทธิประจำวัน</span><span id="rNet">฿0.00</span></div>
-    </div>
-    <p class="hint">แตะที่ตัวเลข "ยอดสุทธิ" ด้านบนการ์ดเพื่อขยายดูตัวเลขใหญ่ ✨</p>
-  </section>
-
-  <!-- ===== FORM 6: เงินทอนยกมา ===== -->
-  <section class="form-card">
-    <div class="form-head">
-      <span class="step-tab">6</span>
-      <h2>เงินทอนยกมา</h2>
-    </div>
-    <p class="sub-note">ของวันที่ <span id="carryDateLabel">-</span></p>
-    <div class="field-grid">
-      <div class="field-row">
-        <label>🪙 เงินทอนยกมา (เหรียญ)</label>
-        <input type="number" id="carryCoin" step="0.01" placeholder="0.00">
+  <!-- ===== FORM 5: เงินทอนยกมา ===== -->
+  <section class="form-card glass" data-card="carry">
+    <div class="card-header">
+      <div class="card-header-left">
+        <span class="step-tab">5</span>
+        <h2>เงินทอนยกมา</h2>
+        <span class="chip carry-chip" id="chipCarry">0 ฿</span>
       </div>
-      <div class="field-row">
-        <label>💵 เงินทอนยกมา (แบงค์)</label>
-        <input type="number" id="carryNote" step="0.01" placeholder="0.00">
-      </div>
+      <button class="chevron-btn" aria-label="ย่อ/ขยาย"><svg viewBox="0 0 24 24"><polyline points="6 9 12 15 18 9"/></svg></button>
     </div>
-    <div class="total-line">👉 รวมเงินทอนยกมา: <span id="carryTotal">฿0.00</span></div>
-    <button class="save-btn" data-save="carry">บันทึกเงินทอนยกมา</button>
+    <div class="card-body">
+      <p class="sub-note">ของวันที่ <span id="carryDateLabel">-</span></p>
+      <div class="row-item">
+        <span class="row-icon">🪙</span><span class="row-label">เงินทอนยกมา (เหรียญ)</span>
+        <input type="number" id="carryCoin" step="0.01" placeholder="0" class="row-input">
+        <span class="row-unit">฿</span>
+      </div>
+      <div class="row-item">
+        <span class="row-icon">💵</span><span class="row-label">เงินทอนยกมา (แบงค์)</span>
+        <input type="number" id="carryNote" step="0.01" placeholder="0" class="row-input">
+        <span class="row-unit">฿</span>
+      </div>
+      <div class="total-line">รวมเงินทอนยกมา: <span id="carryTotal">฿0.00</span></div>
+      <button class="save-btn" data-save="carry">✓ บันทึกเงินทอนยกมา</button>
+    </div>
   </section>
 
   <!-- ===== PERIOD SUMMARY ===== -->
-  <section class="form-card summary-card">
-    <div class="form-head">
-      <span class="step-tab">Σ</span>
-      <h2>สรุปยอดรวม</h2>
+  <section class="form-card glass" data-card="summary">
+    <div class="card-header">
+      <div class="card-header-left">
+        <span class="step-tab">Σ</span>
+        <h2>สรุปยอดรวม</h2>
+      </div>
+      <button class="chevron-btn" aria-label="ย่อ/ขยาย"><svg viewBox="0 0 24 24"><polyline points="6 9 12 15 18 9"/></svg></button>
     </div>
-    <div class="period-toggle">
-      <button class="period-btn active" data-period="day">รายวัน</button>
-      <button class="period-btn" data-period="week">รายสัปดาห์</button>
-      <button class="period-btn" data-period="month">รายเดือน</button>
-      <button class="period-btn" data-period="year">รายปี</button>
+    <div class="card-body">
+      <div class="period-toggle">
+        <button class="period-btn active" data-period="day">รายวัน</button>
+        <button class="period-btn" data-period="week">รายสัปดาห์</button>
+        <button class="period-btn" data-period="month">รายเดือน</button>
+        <button class="period-btn" data-period="year">รายปี</button>
+      </div>
+      <div class="period-results" id="periodResults"></div>
     </div>
-    <div class="period-results" id="periodResults"></div>
   </section>
 
 </main>
