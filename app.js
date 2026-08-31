@@ -1,5 +1,5 @@
 /* =========================================================
-   สมุดเงินสด — Income/Expense Tracker (Glass Edition)
+   สมุดเงินสด — Income/Expense Tracker (Glass Edition v2)
 ========================================================= */
 
 const STORAGE_KEY = 'moneyflow_records_v1';
@@ -8,11 +8,22 @@ const DAY_NAMES_TH = ['วันอาทิตย์','วันจันทร
 const MONTH_NAMES_TH = ['มกราคม','กุมภาพันธ์','มีนาคม','เมษายน','พฤษภาคม','มิถุนายน','กรกฎาคม','สิงหาคม','กันยายน','ตุลาคม','พฤศจิกายน','ธันวาคม'];
 
 let records = {};
-let activeDate = todayStr();  // always defaults to today on load
+let activeDate = todayStr();
 let chartPeriod = 'day';
+let chartType = 'bar';
 
 /* ---------- helpers ---------- */
-function todayStr(){ return new Date().toISOString().slice(0,10); }
+// IMPORTANT: never use Date.toISOString() to get a "date string" — it converts
+// to UTC, which shifts the date backwards during early morning hours in
+// timezones ahead of UTC (e.g. Thailand, UTC+7). Always build the string from
+// the LOCAL year/month/day instead.
+function localDateStr(d){
+  const y = d.getFullYear();
+  const m = String(d.getMonth()+1).padStart(2,'0');
+  const day = String(d.getDate()).padStart(2,'0');
+  return `${y}-${m}-${day}`;
+}
+function todayStr(){ return localDateStr(new Date()); }
 function fmtBaht(n){
   n = Number(n) || 0;
   return '฿' + n.toLocaleString('th-TH', {minimumFractionDigits:2, maximumFractionDigits:2});
@@ -34,10 +45,14 @@ function loadAll(){
 }
 function saveAll(){ localStorage.setItem(STORAGE_KEY, JSON.stringify(records)); }
 function emptyRecord(date){
-  return { date, opening:0, income:{note:0,coin:0,app:0}, expenses:[], change:{coin:0,note:0}, carry:{coin:0,note:0} };
+  return { date, income:{note:0,coin:0,app:0}, expenses:[], change:{coin:0,note:0} };
 }
 function getRecord(date){
   if(!records[date]) records[date] = emptyRecord(date);
+  // backward-compat: ensure shape even if loaded from an older data version
+  if(!records[date].change) records[date].change = {coin:0, note:0};
+  if(!records[date].income) records[date].income = {note:0, coin:0, app:0};
+  if(!records[date].expenses) records[date].expenses = [];
   return records[date];
 }
 function sortedDates(){ return Object.keys(records).sort(); }
@@ -51,20 +66,19 @@ function computeTotals(rec){
   const totalIncome = (rec.income.note||0) + (rec.income.coin||0) + (rec.income.app||0);
   const totalExpense = rec.expenses.reduce((s,e)=> s + (e.amount||0), 0);
   const totalChange = (rec.change.coin||0) + (rec.change.note||0);
-  const totalCarry = (rec.carry.coin||0) + (rec.carry.note||0);
   const incomeReal = totalIncome - totalChange;
   const net = incomeReal - totalExpense;
-  const circulating = (rec.opening||0) + totalIncome - totalExpense - totalChange;
-  return { totalIncome, totalExpense, totalChange, totalCarry, incomeReal, net, circulating };
+  return { totalIncome, totalExpense, totalChange, incomeReal, net };
 }
-function monthlyIncomeTotal(dateStr){
+// รายได้สุทธิของเดือน = ผลรวม (รายรับ - รายจ่าย - เงินทอน) ของทุกวันในเดือนนั้น
+function monthlyNetTotal(dateStr){
   const d = new Date(dateStr + 'T00:00:00');
   let total = 0;
   sortedDates().forEach(key=>{
     const kd = new Date(key + 'T00:00:00');
     if(kd.getFullYear() === d.getFullYear() && kd.getMonth() === d.getMonth()){
       const t = computeTotals(records[key]);
-      total += t.totalIncome;
+      total += t.net;
     }
   });
   return total;
@@ -87,10 +101,8 @@ function confirmAction(title, message){
     document.getElementById('confirmTitle').textContent = title;
     document.getElementById('confirmMessage').textContent = message;
     modal.classList.add('open');
-
     const okBtn = document.getElementById('confirmOk');
     const cancelBtn = document.getElementById('confirmCancel');
-
     function cleanup(result){
       modal.classList.remove('open');
       okBtn.removeEventListener('click', onOk);
@@ -118,14 +130,11 @@ function renderDateUI(){
 
 function renderForm(){
   const rec = getRecord(activeDate);
-  document.getElementById('openingCash').value = rec.opening || '';
   document.getElementById('incomeNote').value = rec.income.note || '';
   document.getElementById('incomeCoin').value = rec.income.coin || '';
   document.getElementById('incomeApp').value = rec.income.app || '';
   document.getElementById('changeCoin').value = rec.change.coin || '';
   document.getElementById('changeNote').value = rec.change.note || '';
-  document.getElementById('carryCoin').value = rec.carry.coin || '';
-  document.getElementById('carryNote').value = rec.carry.note || '';
 
   renderExpenseList(rec);
   renderCards(rec);
@@ -165,28 +174,18 @@ function renderCards(rec){
   document.getElementById('chipIncome').textContent = fmtNum(t.totalIncome) + ' ฿';
   document.getElementById('chipExpense').textContent = fmtNum(t.totalExpense) + ' ฿';
   document.getElementById('chipChange').textContent = fmtNum(t.totalChange) + ' ฿';
-  document.getElementById('chipCarry').textContent = fmtNum(t.totalCarry) + ' ฿';
 
   document.getElementById('incomeTotal').textContent = fmtBaht(t.totalIncome);
   document.getElementById('changeTotal').textContent = fmtBaht(t.totalChange);
-  document.getElementById('carryTotal').textContent = fmtBaht(t.totalCarry);
 
-  const monthTotal = monthlyIncomeTotal(activeDate);
+  const monthTotal = monthlyNetTotal(activeDate);
   const d = new Date(activeDate + 'T00:00:00');
-  document.getElementById('cardMonthlyIncome').textContent = fmtBaht(monthTotal);
-  document.getElementById('monthlyIncomeCaption').textContent =
-    `รวมรายรับทุกวันของเดือน${MONTH_NAMES_TH[d.getMonth()]} ${d.getFullYear()+543}`;
+  document.getElementById('cardMonthlyNet').textContent = fmtBaht(monthTotal);
+  document.getElementById('monthlyNetCaption').textContent =
+    `รวมรายรับหักรายจ่ายและเงินทอน ของเดือน${MONTH_NAMES_TH[d.getMonth()]} ${d.getFullYear()+543}`;
 }
 
 /* ---------- save handlers (all confirm-gated) ---------- */
-async function saveOpening(){
-  const ok = await confirmAction('ยืนยันบันทึกยอดเงินหมุนเวียน', dateAwareMessage('ต้องการบันทึกยอดเงินหมุนเวียนใช่หรือไม่?'));
-  if(!ok) return;
-  const rec = getRecord(activeDate);
-  rec.opening = num('openingCash');
-  saveAll(); renderCards(rec);
-  showToast('บันทึกยอดเงินหมุนเวียนสำเร็จ ✓', 'success');
-}
 async function saveIncome(){
   const ok = await confirmAction('ยืนยันบันทึกรายรับ', dateAwareMessage('ต้องการบันทึกรายรับใช่หรือไม่?'));
   if(!ok) return;
@@ -205,15 +204,6 @@ async function saveChange(){
   rec.change.note = num('changeNote');
   saveAll(); renderCards(rec);
   showToast('บันทึกเงินทอนสำเร็จ ✓', 'success');
-}
-async function saveCarry(){
-  const ok = await confirmAction('ยืนยันบันทึกเงินทอนยกมา', dateAwareMessage('ต้องการบันทึกเงินทอนยกมาใช่หรือไม่?'));
-  if(!ok) return;
-  const rec = getRecord(activeDate);
-  rec.carry.coin = num('carryCoin');
-  rec.carry.note = num('carryNote');
-  saveAll(); renderCards(rec);
-  showToast('บันทึกเงินทอนยกมาสำเร็จ ✓', 'success');
 }
 async function addExpense(){
   const desc = document.getElementById('expenseDesc').value.trim();
@@ -337,14 +327,14 @@ function runSearch(query){
   });
 }
 
-/* ---------- chart (day/week/month/year) ---------- */
+/* ---------- chart: build buckets across period ---------- */
 function buildChartBuckets(period){
   const active = new Date(activeDate + 'T00:00:00');
   const buckets = [];
   if(period === 'day'){
     for(let i=6;i>=0;i--){
       const d = new Date(active); d.setDate(d.getDate()-i);
-      const key = d.toISOString().slice(0,10);
+      const key = localDateStr(d);
       const rec = records[key] || emptyRecord(key);
       const t = computeTotals(rec);
       buckets.push({label:(d.getDate()+'/'+(d.getMonth()+1)), income:t.totalIncome, expense:t.totalExpense});
@@ -383,12 +373,25 @@ function buildChartBuckets(period){
   }
   return buckets;
 }
+
+/* ---------- chart: draw (bar / line / pie) ---------- */
 function renderChart(){
   const canvas = document.getElementById('chartCanvas');
   const ctx = canvas.getContext('2d');
   const W = canvas.width, H = canvas.height;
   ctx.clearRect(0,0,W,H);
   const buckets = buildChartBuckets(chartPeriod);
+
+  const totalIncome = buckets.reduce((s,b)=>s+b.income,0);
+  const totalExpense = buckets.reduce((s,b)=>s+b.expense,0);
+  document.getElementById('legendIncome').textContent = fmtBaht(totalIncome);
+  document.getElementById('legendExpense').textContent = fmtBaht(totalExpense);
+
+  if(chartType === 'bar') drawBarChart(ctx, W, H, buckets);
+  else if(chartType === 'line') drawLineChart(ctx, W, H, buckets);
+  else if(chartType === 'pie') drawPieChart(ctx, W, H, totalIncome, totalExpense);
+}
+function drawBarChart(ctx, W, H, buckets){
   const maxVal = Math.max(1, ...buckets.map(d=>Math.max(d.income,d.expense)));
   const padding = 36;
   const chartW = W - padding*2;
@@ -397,10 +400,7 @@ function renderChart(){
   const barW = Math.min(26, groupW * 0.32);
 
   ctx.strokeStyle = 'rgba(47,111,237,0.2)';
-  ctx.beginPath();
-  ctx.moveTo(padding, H-padding);
-  ctx.lineTo(W-padding, H-padding);
-  ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(padding, H-padding); ctx.lineTo(W-padding, H-padding); ctx.stroke();
 
   buckets.forEach((d, i)=>{
     const x = padding + i*groupW + groupW/2;
@@ -415,6 +415,82 @@ function renderChart(){
     ctx.textAlign = 'center';
     ctx.fillText(d.label, x, H-padding+16);
   });
+}
+function drawLineChart(ctx, W, H, buckets){
+  const maxVal = Math.max(1, ...buckets.map(d=>Math.max(d.income,d.expense)));
+  const padding = 36;
+  const chartW = W - padding*2;
+  const chartH = H - padding*2;
+  const stepX = buckets.length > 1 ? chartW / (buckets.length-1) : 0;
+
+  ctx.strokeStyle = 'rgba(47,111,237,0.2)';
+  ctx.beginPath(); ctx.moveTo(padding, H-padding); ctx.lineTo(W-padding, H-padding); ctx.stroke();
+
+  function drawSeries(key, color){
+    ctx.beginPath();
+    ctx.strokeStyle = color; ctx.lineWidth = 2.4; ctx.lineJoin='round';
+    buckets.forEach((d,i)=>{
+      const x = padding + i*stepX;
+      const y = H - padding - (d[key]/maxVal)*chartH;
+      if(i===0) ctx.moveTo(x,y); else ctx.lineTo(x,y);
+    });
+    ctx.stroke();
+    buckets.forEach((d,i)=>{
+      const x = padding + i*stepX;
+      const y = H - padding - (d[key]/maxVal)*chartH;
+      ctx.beginPath(); ctx.fillStyle = color; ctx.arc(x,y,3.5,0,Math.PI*2); ctx.fill();
+    });
+  }
+  drawSeries('income', '#0EA968');
+  drawSeries('expense', '#E23744');
+
+  ctx.fillStyle = '#52627A';
+  ctx.font = '10.5px IBM Plex Sans Thai, sans-serif';
+  ctx.textAlign = 'center';
+  buckets.forEach((d,i)=>{
+    const x = padding + i*stepX;
+    ctx.fillText(d.label, x, H-padding+16);
+  });
+}
+function drawPieChart(ctx, W, H, totalIncome, totalExpense){
+  const cx = W/2, cy = H/2 - 10, r = Math.min(W,H)/2 - 50;
+  const total = totalIncome + totalExpense;
+  if(total <= 0){
+    ctx.fillStyle = '#52627A';
+    ctx.font = '13px IBM Plex Sans Thai, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('ยังไม่มีข้อมูลในช่วงนี้', cx, cy);
+    return;
+  }
+  const incomeAngle = (totalIncome/total) * Math.PI * 2;
+  ctx.beginPath();
+  ctx.moveTo(cx,cy);
+  ctx.arc(cx, cy, r, -Math.PI/2, -Math.PI/2 + incomeAngle);
+  ctx.closePath();
+  ctx.fillStyle = '#0EA968';
+  ctx.fill();
+
+  ctx.beginPath();
+  ctx.moveTo(cx,cy);
+  ctx.arc(cx, cy, r, -Math.PI/2 + incomeAngle, -Math.PI/2 + Math.PI*2);
+  ctx.closePath();
+  ctx.fillStyle = '#E23744';
+  ctx.fill();
+
+  // percentage labels
+  ctx.fillStyle = '#fff';
+  ctx.font = 'bold 13px IBM Plex Sans Thai, sans-serif';
+  ctx.textAlign = 'center';
+  const incomePct = Math.round((totalIncome/total)*100);
+  const expensePct = 100 - incomePct;
+  const midIncomeAngle = -Math.PI/2 + incomeAngle/2;
+  const midExpenseAngle = -Math.PI/2 + incomeAngle + (Math.PI*2 - incomeAngle)/2;
+  if(totalIncome > 0){
+    ctx.fillText(incomePct+'%', cx + Math.cos(midIncomeAngle)*r*0.6, cy + Math.sin(midIncomeAngle)*r*0.6);
+  }
+  if(totalExpense > 0){
+    ctx.fillText(expensePct+'%', cx + Math.cos(midExpenseAngle)*r*0.6, cy + Math.sin(midExpenseAngle)*r*0.6);
+  }
 }
 
 /* ---------- history panel ---------- */
@@ -461,17 +537,17 @@ function renderHistoryList(){
 
 /* ---------- export: CSV ---------- */
 function buildCsvRows(){
-  const rows = [['date','opening','income_note','income_coin','income_app','expense_desc','expense_category','expense_amount','change_coin','change_note','carry_coin','carry_note']];
+  const rows = [['date','income_note','income_coin','income_app','expense_desc','expense_category','expense_amount','change_coin','change_note']];
   sortedDates().forEach(dateKey=>{
     const rec = records[dateKey];
     if(rec.expenses.length === 0){
-      rows.push([dateKey, rec.opening, rec.income.note, rec.income.coin, rec.income.app, '', '', '', rec.change.coin, rec.change.note, rec.carry.coin, rec.carry.note]);
+      rows.push([dateKey, rec.income.note, rec.income.coin, rec.income.app, '', '', '', rec.change.coin, rec.change.note]);
     }else{
       rec.expenses.forEach((e, idx)=>{
         rows.push([
-          dateKey, idx===0?rec.opening:'', idx===0?rec.income.note:'', idx===0?rec.income.coin:'', idx===0?rec.income.app:'',
+          dateKey, idx===0?rec.income.note:'', idx===0?rec.income.coin:'', idx===0?rec.income.app:'',
           e.desc, e.category, e.amount,
-          idx===0?rec.change.coin:'', idx===0?rec.change.note:'', idx===0?rec.carry.coin:'', idx===0?rec.carry.note:''
+          idx===0?rec.change.coin:'', idx===0?rec.change.note:''
         ]);
       });
     }
@@ -507,7 +583,7 @@ function downloadBlob(content, mime, filename){
 
 /* ---------- export: JSON backup ---------- */
 function exportJson(){
-  const payload = { app: 'moneyflow', version:1, exportedAt: new Date().toISOString(), records };
+  const payload = { app: 'moneyflow', version:2, exportedAt: new Date().toISOString(), records };
   downloadBlob(JSON.stringify(payload, null, 2), 'application/json;charset=utf-8;', 'สมุดเงินสด-backup.json');
   showToast('สำรองข้อมูลสำเร็จ ✓', 'success');
 }
@@ -538,7 +614,6 @@ function exportPdfDay(){
   doc.setFontSize(11);
   let y = 30;
   const lines = [
-    ['Opening balance', rec.opening],
     ['Income - notes', rec.income.note],
     ['Income - coins', rec.income.coin],
     ['Income - app/transfer', rec.income.app],
@@ -549,7 +624,6 @@ function exportPdfDay(){
     ['Real income (income - change)', t.incomeReal],
     ['Total expenses', t.totalExpense],
     ['Net for the day', t.net],
-    ['Circulating balance', t.circulating],
   ];
   lines.forEach(([label, val])=>{
     doc.text(String(label), 14, y);
@@ -571,7 +645,6 @@ function exportPdfDay(){
   showToast('ส่งออก PDF ใบสรุปรายวันสำเร็จ ✓', 'success');
 }
 function exportPdfPeriod(){
-  const period = document.querySelector('.period-btn.active') ? document.querySelector('#periodResults').dataset.period || 'month' : 'month';
   const filtered = filterByPeriod('month', activeDate);
   const { jsPDF } = window.jspdf;
   const doc = new jsPDF();
@@ -613,7 +686,7 @@ async function importCsvFile(file){
   const affectedDates = new Set();
   let lastDate = null;
   rows.forEach(cols=>{
-    const [date, opening, incNote, incCoin, incApp, expDesc, expCat, expAmt, chCoin, chNote, caCoin, caNote] = cols;
+    const [date] = cols;
     const d = date && date.trim() ? date.trim() : lastDate;
     if(!d) return;
     lastDate = d;
@@ -624,19 +697,16 @@ async function importCsvFile(file){
 
   lastDate = null;
   rows.forEach(cols=>{
-    const [date, opening, incNote, incCoin, incApp, expDesc, expCat, expAmt, chCoin, chNote, caCoin, caNote] = cols;
+    const [date, incNote, incCoin, incApp, expDesc, expCat, expAmt, chCoin, chNote] = cols;
     const d = date && date.trim() ? date.trim() : lastDate;
     if(!d) return;
     lastDate = d;
     const rec = getRecord(d);
-    if(opening !== undefined && opening !== '') rec.opening = parseFloat(opening)||0;
     if(incNote !== undefined && incNote !== '') rec.income.note = parseFloat(incNote)||0;
     if(incCoin !== undefined && incCoin !== '') rec.income.coin = parseFloat(incCoin)||0;
     if(incApp !== undefined && incApp !== '') rec.income.app = parseFloat(incApp)||0;
     if(chCoin !== undefined && chCoin !== '') rec.change.coin = parseFloat(chCoin)||0;
     if(chNote !== undefined && chNote !== '') rec.change.note = parseFloat(chNote)||0;
-    if(caCoin !== undefined && caCoin !== '') rec.carry.coin = parseFloat(caCoin)||0;
-    if(caNote !== undefined && caNote !== '') rec.carry.note = parseFloat(caNote)||0;
     if(expDesc && expDesc.trim()){
       rec.expenses.push({ id: uid(), desc: expDesc.trim(), category:(expCat||'อื่นๆ').trim(), amount: parseFloat(expAmt)||0 });
     }
@@ -672,19 +742,19 @@ document.addEventListener('DOMContentLoaded', ()=>{
     if(e.key === 'Enter'){ e.preventDefault(); document.getElementById('appTitle').blur(); }
   });
 
-  // date navigation
+  // date navigation — always recomputed fresh from the device clock
   document.getElementById('activeDate').addEventListener('change', (e)=>{
     activeDate = e.target.value || todayStr();
     renderForm(); refreshOpenCardHeight();
   });
   document.getElementById('dateBack').addEventListener('click', ()=>{
     const d = new Date(activeDate + 'T00:00:00'); d.setDate(d.getDate()-1);
-    activeDate = d.toISOString().slice(0,10);
+    activeDate = localDateStr(d);
     renderForm(); refreshOpenCardHeight();
   });
   document.getElementById('dateFwd').addEventListener('click', ()=>{
     const d = new Date(activeDate + 'T00:00:00'); d.setDate(d.getDate()+1);
-    activeDate = d.toISOString().slice(0,10);
+    activeDate = localDateStr(d);
     renderForm(); refreshOpenCardHeight();
   });
   document.getElementById('dateToday').addEventListener('click', ()=>{
@@ -692,20 +762,21 @@ document.addEventListener('DOMContentLoaded', ()=>{
     renderForm(); refreshOpenCardHeight();
   });
 
-  document.getElementById('useYesterday').addEventListener('click', ()=>{
+  // "use yesterday's change" — autofill only, still requires Save to confirm
+  document.getElementById('useYesterdayChange').addEventListener('click', ()=>{
     const prev = previousDate(activeDate);
     if(!prev){ showToast('ไม่พบข้อมูลของวันก่อนหน้า', 'error'); return; }
-    const t = computeTotals(getRecord(prev));
-    document.getElementById('openingCash').value = t.circulating.toFixed(2);
+    const prevRec = getRecord(prev);
+    document.getElementById('changeCoin').value = prevRec.change.coin || '';
+    document.getElementById('changeNote').value = prevRec.change.note || '';
+    showToast('ดึงยอดเงินทอนของเมื่อวานมาแล้ว กด "บันทึก" เพื่อยืนยัน', 'success');
   });
 
   document.querySelectorAll('[data-save]').forEach(btn=>{
     btn.addEventListener('click', ()=>{
       const type = btn.getAttribute('data-save');
-      if(type === 'opening') saveOpening();
       if(type === 'income') saveIncome();
       if(type === 'change') saveChange();
-      if(type === 'carry') saveCarry();
     });
   });
 
@@ -718,13 +789,11 @@ document.addEventListener('DOMContentLoaded', ()=>{
     if(id) deleteExpense(id);
   });
 
-  document.getElementById('cardNet').addEventListener('click', (e)=>{
-    e.currentTarget.classList.add('zoomed');
-    setTimeout(()=> e.currentTarget.classList.remove('zoomed'), 1400);
-  });
-  document.getElementById('cardIncomeReal').addEventListener('click', (e)=>{
-    e.currentTarget.classList.add('zoomed');
-    setTimeout(()=> e.currentTarget.classList.remove('zoomed'), 1400);
+  // tap to toggle zoom — stays zoomed until tapped again
+  document.querySelectorAll('.zoomable').forEach(el=>{
+    el.addEventListener('click', (e)=>{
+      e.currentTarget.classList.toggle('zoomed');
+    });
   });
 
   document.querySelectorAll('.period-toggle .period-btn[data-period]').forEach(btn=>{
@@ -742,6 +811,14 @@ document.addEventListener('DOMContentLoaded', ()=>{
       document.querySelectorAll('.chart-period-toggle .period-btn[data-chartperiod]').forEach(b=>b.classList.remove('active'));
       btn.classList.add('active');
       chartPeriod = btn.getAttribute('data-chartperiod');
+      renderChart();
+    });
+  });
+  document.querySelectorAll('.chart-type-toggle .period-btn[data-charttype]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      document.querySelectorAll('.chart-type-toggle .period-btn[data-charttype]').forEach(b=>b.classList.remove('active'));
+      btn.classList.add('active');
+      chartType = btn.getAttribute('data-charttype');
       renderChart();
     });
   });
