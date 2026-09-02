@@ -227,6 +227,7 @@
         <div class="field-row">
           <label>หมวดหมู่</label>
           <select id="expenseCategory">
+            <option value="" selected>— ไม่ระบุ —</option>
             <option value="อาหาร">อาหาร</option>
             <option value="เดินทาง">เดินทาง</option>
             <option value="ของใช้">ของใช้</option>
@@ -241,7 +242,7 @@
           <input type="number" id="expenseAmount" step="0.01" placeholder="0.00">
         </div>
       </div>
-      <button class="ghost-btn full" id="addExpenseBtn">+ เพิ่มรายการรายจ่าย</button>
+      <button class="save-btn" id="addExpenseBtn">✓ บันทึกรายการรายจ่าย</button>
       <div class="total-line">รวมรายจ่ายทั้งหมด: <span id="expenseTotal">฿0.00</span></div>
     </div>
   </section>
@@ -268,7 +269,6 @@
         <input type="number" id="changeNote" step="0.01" placeholder="0" class="row-input">
         <span class="row-unit">฿</span>
       </div>
-      <button class="ghost-btn full" id="useYesterdayChange">↩️ ใช้ยอดเงินทอนของเมื่อวาน</button>
       <div class="total-line">รวมเงินทอนวันนี้: <span id="changeTotal">฿0.00</span></div>
       <button class="save-btn" data-save="change">✓ บันทึกเงินทอน</button>
     </div>
@@ -290,7 +290,15 @@
         <button class="period-btn" data-period="month">รายเดือน</button>
         <button class="period-btn" data-period="year">รายปี</button>
       </div>
+      <div class="period-year-wrap" id="periodYearWrap" hidden>
+        <label for="periodYear">เลือกปี</label>
+        <select id="periodYear"></select>
+      </div>
       <div class="period-results" id="periodResults"></div>
+      <div class="period-download-group">
+        <button class="save-btn" id="periodExportExcel">📥 ดาวน์โหลดรายงานนี้ (Excel)</button>
+        <button class="ghost-btn full" id="periodExportPdf">📄 ดาวน์โหลดเป็น PDF</button>
+      </div>
     </div>
   </section>
 

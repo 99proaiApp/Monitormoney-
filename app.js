@@ -185,6 +185,15 @@ function renderCards(rec){
     `รวมรายรับหักรายจ่ายและเงินทอน ของเดือน${MONTH_NAMES_TH[d.getMonth()]} ${d.getFullYear()+543}`;
 }
 
+/* ---------- click feedback (glow pulse on green buttons) ---------- */
+function pulseButton(el){
+  if(!el) return;
+  el.classList.remove('pulse');
+  void el.offsetWidth; // force reflow so the animation can restart
+  el.classList.add('pulse');
+  el.addEventListener('animationend', ()=> el.classList.remove('pulse'), {once:true});
+}
+
 /* ---------- save handlers (all confirm-gated) ---------- */
 async function saveIncome(){
   const ok = await confirmAction('ยืนยันบันทึกรายรับ', dateAwareMessage('ต้องการบันทึกรายรับใช่หรือไม่?'));
@@ -194,6 +203,7 @@ async function saveIncome(){
   rec.income.coin = num('incomeCoin');
   rec.income.app = num('incomeApp');
   saveAll(); renderCards(rec);
+  pulseButton(document.querySelector('[data-save="income"]'));
   showToast('บันทึกรายรับสำเร็จ ✓', 'success');
 }
 async function saveChange(){
@@ -203,14 +213,18 @@ async function saveChange(){
   rec.change.coin = num('changeCoin');
   rec.change.note = num('changeNote');
   saveAll(); renderCards(rec);
+  pulseButton(document.querySelector('[data-save="change"]'));
   showToast('บันทึกเงินทอนสำเร็จ ✓', 'success');
 }
 async function addExpense(){
   const desc = document.getElementById('expenseDesc').value.trim();
   const amount = num('expenseAmount');
-  let category = document.getElementById('expenseCategory').value;
+  const categorySelect = document.getElementById('expenseCategory');
+  let category = categorySelect.value;
   if(category === '__custom'){
-    category = document.getElementById('expenseCategoryCustom').value.trim() || 'อื่นๆ';
+    category = document.getElementById('expenseCategoryCustom').value.trim() || 'ไม่ระบุ';
+  } else if(!category){
+    category = 'ไม่ระบุ';
   }
   if(!desc || amount <= 0){
     showToast('กรุณากรอกรายการและจำนวนเงินให้ถูกต้อง', 'error');
@@ -223,7 +237,11 @@ async function addExpense(){
   saveAll(); renderExpenseList(rec); renderCards(rec);
   document.getElementById('expenseDesc').value = '';
   document.getElementById('expenseAmount').value = '';
-  showToast('เพิ่มรายการรายจ่ายสำเร็จ ✓', 'success');
+  categorySelect.value = '';
+  document.getElementById('expenseCategoryCustom').hidden = true;
+  document.getElementById('expenseCategoryCustom').value = '';
+  pulseButton(document.getElementById('addExpenseBtn'));
+  showToast('บันทึกรายการรายจ่ายสำเร็จ ✓', 'success');
 }
 async function deleteExpense(id){
   const ok = await confirmAction('ยืนยันการลบ', dateAwareMessage('ต้องการลบรายการนี้ใช่หรือไม่?'));
@@ -281,22 +299,131 @@ function filterByPeriod(period, refDateStr){
     return false;
   }).map(k=>records[k]);
 }
+
+/* ---------- period summary: per-row breakdown builders ---------- */
+function getISOWeekDates(refDateStr){
+  const d = new Date(refDateStr + 'T00:00:00');
+  const dayNum = (d.getDay() + 6) % 7; // 0 = Monday
+  const monday = new Date(d);
+  monday.setDate(d.getDate() - dayNum);
+  const days = [];
+  for(let i=0;i<7;i++){
+    const dd = new Date(monday);
+    dd.setDate(monday.getDate()+i);
+    days.push(dd);
+  }
+  return days;
+}
+function getMonthDates(refDateStr){
+  const d = new Date(refDateStr + 'T00:00:00');
+  const year = d.getFullYear(), month = d.getMonth();
+  const daysInMonth = new Date(year, month+1, 0).getDate();
+  const days = [];
+  for(let i=1;i<=daysInMonth;i++) days.push(new Date(year, month, i));
+  return days;
+}
+function shortDayName(d){ return DAY_NAMES_TH[d.getDay()].replace('วัน',''); }
+
+let periodViewYear = new Date().getFullYear();
+let currentPeriodExport = null;
+
+function populatePeriodYears(){
+  const sel = document.getElementById('periodYear');
+  const years = new Set(sortedDates().map(d=> new Date(d+'T00:00:00').getFullYear()));
+  years.add(new Date().getFullYear());
+  years.add(new Date(activeDate+'T00:00:00').getFullYear());
+  const sortedYears = Array.from(years).sort((a,b)=>b-a);
+  const prevVal = sel.value;
+  sel.innerHTML = sortedYears.map(y=>`<option value="${y}">${y+543}</option>`).join('');
+  if(sortedYears.includes(Number(prevVal))){ sel.value = prevVal; }
+  else{ sel.value = String(new Date(activeDate+'T00:00:00').getFullYear()); }
+}
+
+function buildPeriodRows(period, refDateStr, year){
+  const rows = [];
+  if(period === 'day'){
+    const rec = records[refDateStr];
+    const d = new Date(refDateStr + 'T00:00:00');
+    rows.push({ label: thaiDate(refDateStr), sub: DAY_NAMES_TH[d.getDay()], t: rec ? computeTotals(rec) : null, empty: !rec });
+  } else if(period === 'week'){
+    getISOWeekDates(refDateStr).forEach(d=>{
+      const key = localDateStr(d);
+      const rec = records[key];
+      rows.push({ label: d.getDate()+'/'+(d.getMonth()+1), sub: shortDayName(d), t: rec ? computeTotals(rec) : null, empty: !rec });
+    });
+  } else if(period === 'month'){
+    getMonthDates(refDateStr).forEach(d=>{
+      const key = localDateStr(d);
+      const rec = records[key];
+      rows.push({ label: d.getDate()+' '+MONTH_NAMES_TH[d.getMonth()].slice(0,3), sub: shortDayName(d), t: rec ? computeTotals(rec) : null, empty: !rec });
+    });
+  } else if(period === 'year'){
+    for(let m=0;m<12;m++){
+      let income=0, expense=0, change=0, net=0, has=false;
+      sortedDates().forEach(key=>{
+        const kd = new Date(key+'T00:00:00');
+        if(kd.getFullYear() === year && kd.getMonth() === m){
+          has = true;
+          const t = computeTotals(records[key]);
+          income += t.incomeReal; expense += t.totalExpense; change += t.totalChange; net += t.net;
+        }
+      });
+      rows.push({ label: MONTH_NAMES_TH[m], sub: String(year+543), t: has ? {incomeReal:income, totalExpense:expense, totalChange:change, net} : null, empty: !has });
+    }
+  }
+  return rows;
+}
+
+function renderPeriodRow(r){
+  if(r.empty){
+    return `<div class="period-row empty">
+      <div class="period-row-info">
+        <span class="period-row-date">${r.label}</span>
+        <span class="period-row-sub">${r.sub}</span>
+      </div>
+      <span class="period-row-status">หยุด</span>
+    </div>`;
+  }
+  return `<div class="period-row">
+    <div class="period-row-info">
+      <span class="period-row-date">${r.label}</span>
+      <span class="period-row-sub">รับ ${fmtNum(r.t.incomeReal)} · จ่าย ${fmtNum(r.t.totalExpense)}</span>
+    </div>
+    <span class="period-row-net" style="color:${r.t.net>=0?'var(--income)':'var(--expense)'}">${fmtNum(r.t.net)}</span>
+  </div>`;
+}
+
 function renderPeriodSummary(period){
-  const filtered = filterByPeriod(period, activeDate);
-  let income=0, expense=0, change=0;
-  filtered.forEach(rec=>{
-    const t = computeTotals(rec);
-    income += t.totalIncome; expense += t.totalExpense; change += t.totalChange;
-  });
-  const net = income - expense - change;
+  const yearWrap = document.getElementById('periodYearWrap');
+  yearWrap.hidden = period !== 'year';
+  let year = periodViewYear;
+  if(period === 'year'){
+    populatePeriodYears();
+    year = Number(document.getElementById('periodYear').value) || new Date(activeDate+'T00:00:00').getFullYear();
+    periodViewYear = year;
+  }
+
+  const rows = buildPeriodRows(period, activeDate, year);
+  let income=0, expense=0, change=0, net=0;
+  rows.forEach(r=>{ if(r.t){ income+=r.t.incomeReal; expense+=r.t.totalExpense; change+=r.t.totalChange; net+=r.t.net; } });
+
+  const unit = period === 'year' ? 'เดือน' : 'วัน';
+  const rowsHtml = rows.map(renderPeriodRow).join('');
+  const listWrapHtml = period === 'day'
+    ? `<div style="margin-bottom:8px;">${rowsHtml}</div>`
+    : `<div class="period-list">${rowsHtml}</div>`;
+
   const container = document.getElementById('periodResults');
   container.innerHTML = `
-    <div class="p-line p-income"><span>รายรับรวม</span><span class="p-value">${fmtBaht(income)}</span></div>
+    ${listWrapHtml}
+    <div class="p-line p-income"><span>รายรับรวม (ไม่รวมเงินทอน)</span><span class="p-value">${fmtBaht(income)}</span></div>
     <div class="p-line p-expense"><span>รายจ่ายรวม</span><span class="p-value">${fmtBaht(expense)}</span></div>
-    <div class="p-line p-change"><span>เงินทอนรวม</span><span class="p-value">${fmtBaht(change)}</span></div>
+    <div class="p-line p-change"><span>เงินทอนรวม (ไม่นับเป็นรายรับ)</span><span class="p-value">${fmtBaht(change)}</span></div>
     <div class="p-line p-net"><span>ยอดสุทธิรวม</span><span class="p-value">${fmtBaht(net)}</span></div>
-    <div class="p-meta">อ้างอิงจาก ${filtered.length} วันที่มีข้อมูล</div>
+    <div class="p-meta">มีข้อมูล ${rows.filter(r=>!r.empty).length} จาก ${rows.length} ${unit}</div>
   `;
+
+  currentPeriodExport = { period, year, refDate: activeDate, rows, totals:{income, expense, change, net} };
 }
 
 /* ---------- search ---------- */
@@ -337,7 +464,7 @@ function buildChartBuckets(period){
       const key = localDateStr(d);
       const rec = records[key] || emptyRecord(key);
       const t = computeTotals(rec);
-      buckets.push({label:(d.getDate()+'/'+(d.getMonth()+1)), income:t.totalIncome, expense:t.totalExpense});
+      buckets.push({label:(d.getDate()+'/'+(d.getMonth()+1)), income:t.incomeReal, expense:t.totalExpense});
     }
   } else if(period === 'week'){
     for(let i=7;i>=0;i--){
@@ -346,7 +473,7 @@ function buildChartBuckets(period){
       let income=0, expense=0;
       sortedDates().forEach(key=>{
         const kd = new Date(key+'T00:00:00');
-        if(getISOWeekKey(kd) === wk){ const t = computeTotals(records[key]); income+=t.totalIncome; expense+=t.totalExpense; }
+        if(getISOWeekKey(kd) === wk){ const t = computeTotals(records[key]); income+=t.incomeReal; expense+=t.totalExpense; }
       });
       buckets.push({label:'W'+wk.split('-W')[1], income, expense});
     }
@@ -356,7 +483,7 @@ function buildChartBuckets(period){
       let income=0, expense=0;
       sortedDates().forEach(key=>{
         const kd = new Date(key+'T00:00:00');
-        if(kd.getFullYear()===d.getFullYear() && kd.getMonth()===d.getMonth()){ const t = computeTotals(records[key]); income+=t.totalIncome; expense+=t.totalExpense; }
+        if(kd.getFullYear()===d.getFullYear() && kd.getMonth()===d.getMonth()){ const t = computeTotals(records[key]); income+=t.incomeReal; expense+=t.totalExpense; }
       });
       buckets.push({label:MONTH_NAMES_TH[d.getMonth()].slice(0,3), income, expense});
     }
@@ -366,7 +493,7 @@ function buildChartBuckets(period){
       let income=0, expense=0;
       sortedDates().forEach(key=>{
         const kd = new Date(key+'T00:00:00');
-        if(kd.getFullYear()===y){ const t = computeTotals(records[key]); income+=t.totalIncome; expense+=t.totalExpense; }
+        if(kd.getFullYear()===y){ const t = computeTotals(records[key]); income+=t.incomeReal; expense+=t.totalExpense; }
       });
       buckets.push({label:String(y+543), income, expense});
     }
@@ -652,16 +779,63 @@ function exportPdfPeriod(){
   doc.text('Period Report (Monthly)', 14, 18);
   const rows = filtered.map(rec=>{
     const t = computeTotals(rec);
-    return [rec.date, t.totalIncome.toFixed(2), t.totalExpense.toFixed(2), t.totalChange.toFixed(2), t.net.toFixed(2)];
+    return [rec.date, t.incomeReal.toFixed(2), t.totalExpense.toFixed(2), t.totalChange.toFixed(2), t.net.toFixed(2)];
   });
   doc.autoTable({
     startY: 26,
-    head: [['Date','Income','Expense','Change','Net']],
+    head: [['Date','Real Income','Expense','Change','Net']],
     body: rows,
     styles: { fontSize: 9 }
   });
   doc.save(`period-report-${activeDate.slice(0,7)}.pdf`);
   showToast('ส่งออก PDF รายงานสรุปช่วงเวลาสำเร็จ ✓', 'success');
+}
+
+/* ---------- export: currently-viewed period summary (contextual buttons) ---------- */
+function periodExportFilenameBase(){
+  if(!currentPeriodExport) return 'รายงาน';
+  const { period, year, refDate } = currentPeriodExport;
+  if(period === 'day') return `รายงานวัน-${refDate}`;
+  if(period === 'week') return `รายงานสัปดาห์-${refDate}`;
+  if(period === 'month') return `รายงานเดือน-${refDate.slice(0,7)}`;
+  if(period === 'year') return `รายงานปี-${year+543}`;
+  return 'รายงาน';
+}
+function exportPeriodExcel(){
+  if(!currentPeriodExport){ showToast('ยังไม่มีข้อมูลสรุปให้ดาวน์โหลด', 'error'); return; }
+  const { rows, totals } = currentPeriodExport;
+  const header = ['วันที่ / เดือน','สถานะ','รายรับแท้จริง','รายจ่าย','เงินทอน','สุทธิ'];
+  const body = rows.map(r => r.empty
+    ? [r.label, 'หยุด', '', '', '', '']
+    : [r.label, '', r.t.incomeReal.toFixed(2), r.t.totalExpense.toFixed(2), r.t.totalChange.toFixed(2), r.t.net.toFixed(2)]
+  );
+  const sheetRows = [header, ...body, [], ['รวมทั้งหมด', '', totals.income.toFixed(2), totals.expense.toFixed(2), totals.change.toFixed(2), totals.net.toFixed(2)]];
+  const ws = XLSX.utils.aoa_to_sheet(sheetRows);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'รายงาน');
+  XLSX.writeFile(wb, periodExportFilenameBase() + '.xlsx');
+  showToast('ดาวน์โหลดรายงาน Excel สำเร็จ ✓', 'success');
+}
+function exportPeriodPdf(){
+  if(!currentPeriodExport){ showToast('ยังไม่มีข้อมูลสรุปให้ดาวน์โหลด', 'error'); return; }
+  const { rows, totals } = currentPeriodExport;
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF();
+  doc.setFontSize(15);
+  doc.text('Period Report', 14, 18);
+  const body = rows.map(r => r.empty
+    ? [r.label, 'Closed', '-', '-', '-', '-']
+    : [r.label, '', r.t.incomeReal.toFixed(2), r.t.totalExpense.toFixed(2), r.t.totalChange.toFixed(2), r.t.net.toFixed(2)]
+  );
+  doc.autoTable({
+    startY: 26,
+    head: [['Date','Status','Real Income','Expense','Change','Net']],
+    body: body,
+    foot: [['Total','', totals.income.toFixed(2), totals.expense.toFixed(2), totals.change.toFixed(2), totals.net.toFixed(2)]],
+    styles: { fontSize: 8 }
+  });
+  doc.save(periodExportFilenameBase() + '.pdf');
+  showToast('ดาวน์โหลดรายงาน PDF สำเร็จ ✓', 'success');
 }
 
 /* ---------- import CSV (merge, realtime) ---------- */
@@ -762,16 +936,6 @@ document.addEventListener('DOMContentLoaded', ()=>{
     renderForm(); refreshOpenCardHeight();
   });
 
-  // "use yesterday's change" — autofill only, still requires Save to confirm
-  document.getElementById('useYesterdayChange').addEventListener('click', ()=>{
-    const prev = previousDate(activeDate);
-    if(!prev){ showToast('ไม่พบข้อมูลของวันก่อนหน้า', 'error'); return; }
-    const prevRec = getRecord(prev);
-    document.getElementById('changeCoin').value = prevRec.change.coin || '';
-    document.getElementById('changeNote').value = prevRec.change.note || '';
-    showToast('ดึงยอดเงินทอนของเมื่อวานมาแล้ว กด "บันทึก" เพื่อยืนยัน', 'success');
-  });
-
   document.querySelectorAll('[data-save]').forEach(btn=>{
     btn.addEventListener('click', ()=>{
       const type = btn.getAttribute('data-save');
@@ -805,6 +969,14 @@ document.addEventListener('DOMContentLoaded', ()=>{
     });
   });
   renderPeriodSummary('day');
+
+  document.getElementById('periodYear').addEventListener('change', ()=>{
+    periodViewYear = Number(document.getElementById('periodYear').value);
+    renderPeriodSummary('year');
+    refreshOpenCardHeight();
+  });
+  document.getElementById('periodExportExcel').addEventListener('click', exportPeriodExcel);
+  document.getElementById('periodExportPdf').addEventListener('click', exportPeriodPdf);
 
   document.querySelectorAll('.chart-period-toggle .period-btn[data-chartperiod]').forEach(btn=>{
     btn.addEventListener('click', ()=>{

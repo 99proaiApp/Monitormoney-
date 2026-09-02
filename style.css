@@ -290,18 +290,25 @@ body{
 .row-unit{font-size:11.5px; color:var(--ink-soft); font-weight:600; width:12px;}
 
 .total-line{
-  font-size:12.5px; font-weight:700; margin:4px 0 11px; display:flex; justify-content:space-between;
-  padding-top:9px; border-top:1px dashed rgba(47,111,237,0.15);
+  font-size:12.5px; font-weight:700; margin:4px 0 11px; display:flex; justify-content:space-between; align-items:center;
+  padding:10px 6px 9px 2px; border-top:1px dashed rgba(47,111,237,0.15);
 }
-.total-line span{font-family:'IBM Plex Mono',monospace;}
+.total-line span{font-family:'IBM Plex Mono',monospace; font-size:19px; font-weight:800; letter-spacing:.2px; padding-right:2px;}
 
 .save-btn{
   width:100%; background:var(--income); color:#fff; border:none; border-radius:999px;
-  padding:11px; font-size:13px; font-weight:700; cursor:pointer; font-family:inherit;
-  transition:background .15s ease, transform .1s ease; box-shadow:0 4px 14px rgba(14,169,104,0.3);
+  padding:9px; font-size:12.5px; font-weight:700; cursor:pointer; font-family:inherit;
+  transition:background .15s ease, transform .1s ease, box-shadow .2s ease;
+  box-shadow:0 3px 10px rgba(14,169,104,0.28); position:relative;
 }
-.save-btn:hover{background:#0b8f57;}
-.save-btn:active{transform:scale(0.98);}
+.save-btn:hover{background:#0b8f57; box-shadow:0 4px 13px rgba(14,169,104,0.35);}
+.save-btn:active{transform:scale(0.96);}
+.save-btn.pulse{animation:saveGlow .55s ease-out;}
+@keyframes saveGlow{
+  0%{box-shadow:0 3px 10px rgba(14,169,104,0.28), 0 0 0 0 rgba(14,169,104,0.55);}
+  60%{box-shadow:0 3px 10px rgba(14,169,104,0.28), 0 0 0 14px rgba(14,169,104,0);}
+  100%{box-shadow:0 3px 10px rgba(14,169,104,0.28), 0 0 0 0 rgba(14,169,104,0);}
+}
 
 .ghost-btn{
   background:rgba(255,255,255,0.6); border:1px solid rgba(47,111,237,0.16); border-radius:var(--radius-sm);
@@ -342,6 +349,26 @@ body{
 .p-line.p-change .p-value{color:var(--change);}
 .p-line.p-net .p-value{color:var(--net);}
 .p-meta{font-size:10.5px;color:var(--ink-soft); padding-top:7px;}
+
+.period-year-wrap{display:flex; align-items:center; gap:8px; margin-bottom:11px;}
+.period-year-wrap label{font-size:11.5px; color:var(--ink-soft); font-weight:600; flex-shrink:0;}
+.period-year-wrap select{
+  flex:1; padding:8px; border-radius:var(--radius-sm); border:1px solid rgba(47,111,237,0.18);
+  background:rgba(255,255,255,0.6); font-family:inherit; font-size:12.5px; color:var(--ink);
+}
+.period-list{max-height:340px; overflow-y:auto; display:flex; flex-direction:column; gap:6px; margin-bottom:8px; padding-right:2px;}
+.period-row{
+  display:flex; justify-content:space-between; align-items:center;
+  background:rgba(255,255,255,0.45); border:1px solid rgba(47,111,237,0.08);
+  border-radius:var(--radius-sm); padding:8px 10px;
+}
+.period-row.empty{background:rgba(226,55,68,0.05); border-color:rgba(226,55,68,0.14);}
+.period-row-info{display:flex; flex-direction:column; gap:1px;}
+.period-row-date{font-weight:700; font-size:12px; color:var(--ink);}
+.period-row-sub{font-size:10px; color:var(--ink-soft);}
+.period-row-net{font-weight:800; font-size:13px; font-family:'IBM Plex Mono',monospace;}
+.period-row-status{font-weight:700; font-size:11.5px; color:var(--expense);}
+.period-download-group{display:flex; flex-direction:column; gap:8px; margin-top:2px;}
 
 #toast-container{
   position:fixed; top:12px; left:50%; transform:translateX(-50%);
