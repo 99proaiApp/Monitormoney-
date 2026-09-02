@@ -120,6 +120,32 @@ function dateAwareMessage(baseMessage){
   return baseMessage + ` (ข้อมูลของวันที่ ${thaiDate(activeDate)})`;
 }
 
+/* ---------- import choice modal (merge / overwrite / cancel) ---------- */
+function chooseImportMode(title, messageHtml){
+  return new Promise((resolve)=>{
+    const modal = document.getElementById('importChoiceModal');
+    document.getElementById('importChoiceTitle').textContent = title;
+    document.getElementById('importChoiceMessage').innerHTML = messageHtml;
+    modal.classList.add('open');
+    const mergeBtn = document.getElementById('importChoiceMerge');
+    const overwriteBtn = document.getElementById('importChoiceOverwrite');
+    const cancelBtn = document.getElementById('importChoiceCancel');
+    function cleanup(result){
+      modal.classList.remove('open');
+      mergeBtn.removeEventListener('click', onMerge);
+      overwriteBtn.removeEventListener('click', onOverwrite);
+      cancelBtn.removeEventListener('click', onCancel);
+      resolve(result);
+    }
+    function onMerge(){ cleanup('merge'); }
+    function onOverwrite(){ cleanup('overwrite'); }
+    function onCancel(){ cleanup(null); }
+    mergeBtn.addEventListener('click', onMerge);
+    overwriteBtn.addEventListener('click', onOverwrite);
+    cancelBtn.addEventListener('click', onCancel);
+  });
+}
+
 /* ---------- render ---------- */
 function renderDateUI(){
   document.getElementById('activeDate').value = activeDate;
@@ -866,8 +892,19 @@ async function importCsvFile(file){
     lastDate = d;
     affectedDates.add(d);
   });
-  const ok = await confirmAction('ยืนยันนำเข้าข้อมูล', `พบข้อมูล ${affectedDates.size} วันในไฟล์ CSV ต้องการรวมข้อมูลเข้ากับข้อมูลปัจจุบันหรือไม่?`);
-  if(!ok) return;
+  if(affectedDates.size === 0){ showToast('ไม่พบข้อมูลในไฟล์ CSV', 'error'); return; }
+
+  const mode = await chooseImportMode(
+    'นำเข้าข้อมูล CSV',
+    `พบข้อมูล <b>${affectedDates.size} วัน</b> ในไฟล์<br><br>
+     <b>➕ รวมข้อมูล</b> — เก็บข้อมูลเดิมไว้ รายรับ/เงินทอนจะถูกบวกเพิ่มจากของเดิม รายจ่ายจะถูกเพิ่มต่อท้าย<br><br>
+     <b>♻️ บันทึกทับ</b> — ลบข้อมูลเดิมของวันที่ตรงกันออกก่อน แล้วใส่ข้อมูลจาก CSV แทนทั้งหมด (ป้องกันรายการซ้ำเวลานำเข้าไฟล์เดิมซ้ำ)`
+  );
+  if(!mode) return;
+
+  if(mode === 'overwrite'){
+    affectedDates.forEach(d=>{ records[d] = emptyRecord(d); });
+  }
 
   lastDate = null;
   rows.forEach(cols=>{
@@ -876,19 +913,30 @@ async function importCsvFile(file){
     if(!d) return;
     lastDate = d;
     const rec = getRecord(d);
-    if(incNote !== undefined && incNote !== '') rec.income.note = parseFloat(incNote)||0;
-    if(incCoin !== undefined && incCoin !== '') rec.income.coin = parseFloat(incCoin)||0;
-    if(incApp !== undefined && incApp !== '') rec.income.app = parseFloat(incApp)||0;
-    if(chCoin !== undefined && chCoin !== '') rec.change.coin = parseFloat(chCoin)||0;
-    if(chNote !== undefined && chNote !== '') rec.change.note = parseFloat(chNote)||0;
+    if(mode === 'merge'){
+      if(incNote !== undefined && incNote !== '') rec.income.note = (rec.income.note||0) + (parseFloat(incNote)||0);
+      if(incCoin !== undefined && incCoin !== '') rec.income.coin = (rec.income.coin||0) + (parseFloat(incCoin)||0);
+      if(incApp !== undefined && incApp !== '') rec.income.app = (rec.income.app||0) + (parseFloat(incApp)||0);
+      if(chCoin !== undefined && chCoin !== '') rec.change.coin = (rec.change.coin||0) + (parseFloat(chCoin)||0);
+      if(chNote !== undefined && chNote !== '') rec.change.note = (rec.change.note||0) + (parseFloat(chNote)||0);
+    }else{
+      if(incNote !== undefined && incNote !== '') rec.income.note = parseFloat(incNote)||0;
+      if(incCoin !== undefined && incCoin !== '') rec.income.coin = parseFloat(incCoin)||0;
+      if(incApp !== undefined && incApp !== '') rec.income.app = parseFloat(incApp)||0;
+      if(chCoin !== undefined && chCoin !== '') rec.change.coin = parseFloat(chCoin)||0;
+      if(chNote !== undefined && chNote !== '') rec.change.note = parseFloat(chNote)||0;
+    }
     if(expDesc && expDesc.trim()){
-      rec.expenses.push({ id: uid(), desc: expDesc.trim(), category:(expCat||'อื่นๆ').trim(), amount: parseFloat(expAmt)||0 });
+      rec.expenses.push({ id: uid(), desc: expDesc.trim(), category:(expCat||'ไม่ระบุ').trim(), amount: parseFloat(expAmt)||0 });
     }
   });
   saveAll();
   populateHistoryYears();
   renderForm();
-  showToast('นำเข้า CSV สำเร็จ ✓ ข้อมูลอัปเดตเรียบร้อย', 'success');
+  showToast(
+    mode === 'overwrite' ? `นำเข้า CSV สำเร็จ ✓ บันทึกทับ ${affectedDates.size} วันแล้ว` : `นำเข้า CSV สำเร็จ ✓ รวมข้อมูล ${affectedDates.size} วันแล้ว`,
+    'success'
+  );
 }
 
 /* ---------- app title (editable) ---------- */

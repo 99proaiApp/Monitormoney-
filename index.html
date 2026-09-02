@@ -31,6 +31,19 @@
   </div>
 </div>
 
+<!-- ===== IMPORT CHOICE MODAL (merge / overwrite) ===== -->
+<div class="modal-overlay" id="importChoiceModal">
+  <div class="modal-box glass">
+    <h3 id="importChoiceTitle">นำเข้าข้อมูล CSV</h3>
+    <p id="importChoiceMessage">เลือกวิธีนำเข้าข้อมูล</p>
+    <div class="modal-actions modal-actions-col">
+      <button class="modal-btn primary" id="importChoiceMerge">➕ รวมข้อมูล (เก็บของเดิม แล้วบวกเพิ่ม)</button>
+      <button class="modal-btn danger" id="importChoiceOverwrite">♻️ บันทึกทับ (ลบของเดิมในวันที่ตรงกัน)</button>
+      <button class="modal-btn ghost" id="importChoiceCancel">ยกเลิก</button>
+    </div>
+  </div>
+</div>
+
 <!-- ===== HEADER ===== -->
 <header class="topbar glass">
   <div class="brand">
