@@ -219,6 +219,25 @@ function pulseButton(el){
   el.classList.add('pulse');
   el.addEventListener('animationend', ()=> el.classList.remove('pulse'), {once:true});
 }
+/* soft tap ripple on every save button, immediate feedback on press */
+function spawnRipple(btn, evt){
+  const rect = btn.getBoundingClientRect();
+  const size = Math.max(rect.width, rect.height) * 1.1;
+  const x = (evt && evt.clientX ? evt.clientX - rect.left : rect.width/2) - size/2;
+  const y = (evt && evt.clientY ? evt.clientY - rect.top : rect.height/2) - size/2;
+  const span = document.createElement('span');
+  span.className = 'ripple';
+  span.style.width = size + 'px';
+  span.style.height = size + 'px';
+  span.style.left = x + 'px';
+  span.style.top = y + 'px';
+  btn.appendChild(span);
+  setTimeout(()=> span.remove(), 500);
+}
+document.addEventListener('click', (e)=>{
+  const btn = e.target.closest('.save-btn');
+  if(btn) spawnRipple(btn, e);
+});
 
 /* ---------- save handlers (all confirm-gated) ---------- */
 async function saveIncome(){
