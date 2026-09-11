@@ -245,7 +245,9 @@ body{
 
 /* tap to toggle zoom (persists until tapped again) */
 .zoomable{ cursor:pointer; transition: transform .35s cubic-bezier(.34,1.56,.64,1); }
-.zoomable.zoomed{ transform:scale(1.45) !important; animation-play-state:paused; }
+.zoomable.zoomed{ transform:scale(1.45) !important; animation-play-state:paused; position:relative; z-index:5; }
+.hero-stat{ padding-top:2px; padding-bottom:2px; }
+.hero-card{ row-gap:18px; }
 
 /* form cards / accordion */
 .form-card{ border-radius:var(--radius-lg); margin-bottom:9px; overflow:hidden; }
