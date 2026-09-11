@@ -223,7 +223,7 @@ body{
 }
 .hero-unit{font-size:9.5px; color:var(--ink-soft); margin-top:3px;}
 .hero-caption{
-  width:100%; text-align:center; font-size:10.5px; color:var(--ink-soft);
+  grid-column:1 / -1; width:100%; text-align:center; font-size:10.5px; color:var(--ink-soft);
   margin-top:11px; padding-top:9px; border-top:1px dashed rgba(47,111,237,0.15);
 }
 .hero-caption b{color:var(--change); font-weight:700;}
