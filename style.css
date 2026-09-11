@@ -133,6 +133,7 @@ body{
 .chart-legend .dot{width:9px;height:9px;border-radius:50%;display:inline-block;margin-right:4px;}
 .dot.income{background:var(--income);}
 .dot.expense{background:var(--expense);}
+.dot.home{background:var(--carry);}
 #chartCanvas{width:100%;display:block;margin:10px auto 18px;padding:0 16px;box-sizing:content-box;}
 .chart-type-toggle, .chart-period-toggle{padding:10px 16px 0; margin-bottom:0;}
 
@@ -196,6 +197,7 @@ body{
 .hero-icon{font-size:11px;}
 .hero-icon-label.income .hero-icon{color:var(--income);}
 .hero-icon-label.expense .hero-icon{color:var(--expense);}
+.hero-icon-label.capital .hero-icon{color:var(--carry);}
 .hero-icon-label.net .hero-icon{color:var(--net);}
 .hero-number{
   font-size:27px; font-weight:800; line-height:1;
@@ -204,6 +206,7 @@ body{
 }
 .hero-number.income{color:var(--income);}
 .hero-number.expense{color:var(--expense);}
+.hero-number.capital{color:var(--carry);}
 .hero-number.net{
   color:var(--net);
   font-size:38px;
@@ -220,6 +223,7 @@ body{
 .hero-number{ display:inline-block; }
 .floaty{ animation: floaty 3.6s ease-in-out infinite; }
 .hero-stat:nth-child(3) .floaty{ animation-delay:.5s; }
+.hero-stat:nth-child(5) .floaty{ animation-delay:1s; }
 @keyframes floaty{
   0%,100%{ transform:translateY(0px); }
   50%{ transform:translateY(-5px); }
@@ -301,6 +305,8 @@ body{
 [data-card="expense"] .total-line span{color:var(--expense);}
 [data-card="change"] .total-line{background:var(--change-bg);}
 [data-card="change"] .total-line span{color:var(--change);}
+[data-card="homeexpense"] .total-line{background:var(--carry-bg);}
+[data-card="homeexpense"] .total-line span{color:var(--carry);}
 
 .save-btn{
   width:100%; background:var(--income); color:#fff; border:none; border-radius:999px;
@@ -358,6 +364,7 @@ body{
 .p-value{font-weight:800; font-family:'IBM Plex Mono',monospace;}
 .p-line.p-income .p-value{color:var(--income);}
 .p-line.p-expense .p-value{color:var(--expense);}
+.p-line.p-home .p-value{color:var(--carry);}
 .p-line.p-change .p-value{color:var(--change);}
 .p-line.p-net .p-value{color:var(--net);}
 .p-meta{font-size:10.5px;color:var(--ink-soft); padding-top:7px;}

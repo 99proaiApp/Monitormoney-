@@ -45,7 +45,7 @@ function loadAll(){
 }
 function saveAll(){ localStorage.setItem(STORAGE_KEY, JSON.stringify(records)); }
 function emptyRecord(date){
-  return { date, income:{note:0,coin:0,app:0}, expenses:[], change:{coin:0,note:0} };
+  return { date, income:{note:0,coin:0,app:0}, expenses:[], homeExpenses:[], change:{coin:0,note:0} };
 }
 function getRecord(date){
   if(!records[date]) records[date] = emptyRecord(date);
@@ -53,6 +53,7 @@ function getRecord(date){
   if(!records[date].change) records[date].change = {coin:0, note:0};
   if(!records[date].income) records[date].income = {note:0, coin:0, app:0};
   if(!records[date].expenses) records[date].expenses = [];
+  if(!records[date].homeExpenses) records[date].homeExpenses = [];
   return records[date];
 }
 function sortedDates(){ return Object.keys(records).sort(); }
@@ -65,10 +66,11 @@ function previousDate(date){
 function computeTotals(rec){
   const totalIncome = (rec.income.note||0) + (rec.income.coin||0) + (rec.income.app||0);
   const totalExpense = rec.expenses.reduce((s,e)=> s + (e.amount||0), 0);
+  const totalHomeExpense = (rec.homeExpenses||[]).reduce((s,e)=> s + (e.amount||0), 0);
   const totalChange = (rec.change.coin||0) + (rec.change.note||0);
   const incomeReal = totalIncome - totalChange;
-  const net = incomeReal - totalExpense;
-  return { totalIncome, totalExpense, totalChange, incomeReal, net };
+  const net = incomeReal - totalExpense - totalHomeExpense;
+  return { totalIncome, totalExpense, totalHomeExpense, totalChange, incomeReal, net };
 }
 // รายได้สุทธิของเดือน = ผลรวม (รายรับ - รายจ่าย - เงินทอน) ของทุกวันในเดือนนั้น
 function monthlyNetTotal(dateStr){
@@ -163,6 +165,7 @@ function renderForm(){
   document.getElementById('changeNote').value = rec.change.note || '';
 
   renderExpenseList(rec);
+  renderHomeExpenseList(rec);
   renderCards(rec);
   renderDateUI();
 }
@@ -176,7 +179,7 @@ function renderExpenseList(rec){
     div.innerHTML = `
       <div class="ei-info">
         <span>${escapeHtml(e.desc)}</span>
-        <span class="ei-cat">${escapeHtml(e.category)}</span>
+        <span class="ei-cat">${escapeHtml(e.category || 'ไม่ระบุหมวดหมู่')}</span>
       </div>
       <div style="display:flex;align-items:center;">
         <span class="ei-amount">${fmtBaht(e.amount)}</span>
@@ -187,18 +190,39 @@ function renderExpenseList(rec){
   document.getElementById('expenseTotal').textContent = fmtBaht(rec.expenses.reduce((s,e)=>s+e.amount,0));
 }
 
+function renderHomeExpenseList(rec){
+  const list = document.getElementById('homeExpenseList');
+  list.innerHTML = '';
+  (rec.homeExpenses||[]).forEach(e=>{
+    const div = document.createElement('div');
+    div.className = 'expense-item';
+    div.innerHTML = `
+      <div class="ei-info">
+        <span>${escapeHtml(e.desc)}</span>
+      </div>
+      <div style="display:flex;align-items:center;">
+        <span class="ei-amount">${fmtBaht(e.amount)}</span>
+        <button class="ei-del" data-del-home="${e.id}" aria-label="ลบรายการ">✕</button>
+      </div>`;
+    list.appendChild(div);
+  });
+  document.getElementById('homeExpenseTotal').textContent = fmtBaht((rec.homeExpenses||[]).reduce((s,e)=>s+e.amount,0));
+}
+
 function escapeHtml(s){ const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
 
 function renderCards(rec){
   const t = computeTotals(rec);
   document.getElementById('cardIncomeReal').textContent = fmtNum(t.incomeReal);
   document.getElementById('cardExpense').textContent = fmtNum(t.totalExpense);
+  document.getElementById('cardHomeExpense').textContent = fmtNum(t.totalHomeExpense);
   document.getElementById('cardNet').textContent = fmtNum(t.net);
   document.getElementById('heroCaption').innerHTML =
-    `เงินทอน <b>${fmtNum(t.totalChange)} ฿</b> — (รายรับ ${fmtNum(t.totalIncome)} – ${fmtNum(t.totalChange)} = รายรับแท้จริง ${fmtNum(t.incomeReal)} ฿)`;
+    `เงินทอน <b>${fmtNum(t.totalChange)} ฿</b> — (รายรับ ${fmtNum(t.totalIncome)} – ${fmtNum(t.totalChange)} = รายรับแท้จริง ${fmtNum(t.incomeReal)} ฿) · เงินบ้าน <b>${fmtNum(t.totalHomeExpense)} ฿</b> หักออกจากกำไรโดยตรง`;
 
   document.getElementById('chipIncome').textContent = fmtNum(t.totalIncome) + ' ฿';
   document.getElementById('chipExpense').textContent = fmtNum(t.totalExpense) + ' ฿';
+  document.getElementById('chipHomeExpense').textContent = fmtNum(t.totalHomeExpense) + ' ฿';
   document.getElementById('chipChange').textContent = fmtNum(t.totalChange) + ' ฿';
 
   document.getElementById('incomeTotal').textContent = fmtBaht(t.totalIncome);
@@ -208,7 +232,7 @@ function renderCards(rec){
   const d = new Date(activeDate + 'T00:00:00');
   document.getElementById('cardMonthlyNet').textContent = fmtBaht(monthTotal);
   document.getElementById('monthlyNetCaption').textContent =
-    `รวมรายรับหักรายจ่ายและเงินทอน ของเดือน${MONTH_NAMES_TH[d.getMonth()]} ${d.getFullYear()+543}`;
+    `รวมรายรับหักรายจ่าย เงินบ้าน และเงินทอน ของเดือน${MONTH_NAMES_TH[d.getMonth()]} ${d.getFullYear()+543}`;
 }
 
 /* ---------- click feedback (glow pulse on green buttons) ---------- */
@@ -294,6 +318,32 @@ async function deleteExpense(id){
   const rec = getRecord(activeDate);
   rec.expenses = rec.expenses.filter(e => e.id !== id);
   saveAll(); renderExpenseList(rec); renderCards(rec);
+  showToast('ลบรายการสำเร็จ ✓', 'error');
+}
+
+async function addHomeExpense(){
+  const desc = document.getElementById('homeExpenseDesc').value.trim();
+  const amount = num('homeExpenseAmount');
+  if(!desc || amount <= 0){
+    showToast('กรุณากรอกรายการและจำนวนเงินให้ถูกต้อง', 'error');
+    return;
+  }
+  const ok = await confirmAction('ยืนยันบันทึกรายจ่ายเงินบ้าน', dateAwareMessage(`บันทึกรายการ "${desc}" จำนวน ${fmtBaht(amount)} เป็นรายจ่ายเงินบ้าน (จะหักออกจากกำไรสุทธิ ไม่นับเป็นรายรับ) ใช่หรือไม่?`));
+  if(!ok) return;
+  const rec = getRecord(activeDate);
+  rec.homeExpenses.push({ id: uid(), desc, amount });
+  saveAll(); renderHomeExpenseList(rec); renderCards(rec);
+  document.getElementById('homeExpenseDesc').value = '';
+  document.getElementById('homeExpenseAmount').value = '';
+  pulseButton(document.getElementById('addHomeExpenseBtn'));
+  showToast('บันทึกรายจ่ายเงินบ้านสำเร็จ ✓', 'success');
+}
+async function deleteHomeExpense(id){
+  const ok = await confirmAction('ยืนยันการลบ', dateAwareMessage('ต้องการลบรายการนี้ใช่หรือไม่?'));
+  if(!ok) return;
+  const rec = getRecord(activeDate);
+  rec.homeExpenses = rec.homeExpenses.filter(e => e.id !== id);
+  saveAll(); renderHomeExpenseList(rec); renderCards(rec);
   showToast('ลบรายการสำเร็จ ✓', 'error');
 }
 
@@ -404,16 +454,16 @@ function buildPeriodRows(period, refDateStr, year){
     });
   } else if(period === 'year'){
     for(let m=0;m<12;m++){
-      let income=0, expense=0, change=0, net=0, has=false;
+      let income=0, expense=0, homeExpense=0, change=0, net=0, has=false;
       sortedDates().forEach(key=>{
         const kd = new Date(key+'T00:00:00');
         if(kd.getFullYear() === year && kd.getMonth() === m){
           has = true;
           const t = computeTotals(records[key]);
-          income += t.incomeReal; expense += t.totalExpense; change += t.totalChange; net += t.net;
+          income += t.incomeReal; expense += t.totalExpense; homeExpense += t.totalHomeExpense; change += t.totalChange; net += t.net;
         }
       });
-      rows.push({ label: MONTH_NAMES_TH[m], sub: String(year+543), t: has ? {incomeReal:income, totalExpense:expense, totalChange:change, net} : null, empty: !has });
+      rows.push({ label: MONTH_NAMES_TH[m], sub: String(year+543), t: has ? {incomeReal:income, totalExpense:expense, totalHomeExpense:homeExpense, totalChange:change, net} : null, empty: !has });
     }
   }
   return rows;
@@ -432,7 +482,7 @@ function renderPeriodRow(r){
   return `<div class="period-row">
     <div class="period-row-info">
       <span class="period-row-date">${r.label}</span>
-      <span class="period-row-sub">รับ ${fmtNum(r.t.incomeReal)} · จ่าย ${fmtNum(r.t.totalExpense)}</span>
+      <span class="period-row-sub">รับ ${fmtNum(r.t.incomeReal)} · จ่าย ${fmtNum(r.t.totalExpense)} · บ้าน ${fmtNum(r.t.totalHomeExpense)}</span>
     </div>
     <span class="period-row-net" style="color:${r.t.net>=0?'var(--income)':'var(--expense)'}">${fmtNum(r.t.net)}</span>
   </div>`;
@@ -449,8 +499,8 @@ function renderPeriodSummary(period){
   }
 
   const rows = buildPeriodRows(period, activeDate, year);
-  let income=0, expense=0, change=0, net=0;
-  rows.forEach(r=>{ if(r.t){ income+=r.t.incomeReal; expense+=r.t.totalExpense; change+=r.t.totalChange; net+=r.t.net; } });
+  let income=0, expense=0, homeExpense=0, change=0, net=0;
+  rows.forEach(r=>{ if(r.t){ income+=r.t.incomeReal; expense+=r.t.totalExpense; homeExpense+=r.t.totalHomeExpense||0; change+=r.t.totalChange; net+=r.t.net; } });
 
   const unit = period === 'year' ? 'เดือน' : 'วัน';
   const rowsHtml = rows.map(renderPeriodRow).join('');
@@ -463,12 +513,13 @@ function renderPeriodSummary(period){
     ${listWrapHtml}
     <div class="p-line p-income"><span>รายรับรวม (ไม่รวมเงินทอน)</span><span class="p-value">${fmtBaht(income)}</span></div>
     <div class="p-line p-expense"><span>รายจ่ายรวม</span><span class="p-value">${fmtBaht(expense)}</span></div>
+    <div class="p-line p-home"><span>รายจ่ายเงินบ้าน (ต้นทุน)</span><span class="p-value">${fmtBaht(homeExpense)}</span></div>
     <div class="p-line p-change"><span>เงินทอนรวม (ไม่นับเป็นรายรับ)</span><span class="p-value">${fmtBaht(change)}</span></div>
-    <div class="p-line p-net"><span>ยอดสุทธิรวม</span><span class="p-value">${fmtBaht(net)}</span></div>
+    <div class="p-line p-net"><span>กำไรสุทธิรวม</span><span class="p-value">${fmtBaht(net)}</span></div>
     <div class="p-meta">มีข้อมูล ${rows.filter(r=>!r.empty).length} จาก ${rows.length} ${unit}</div>
   `;
 
-  currentPeriodExport = { period, year, refDate: activeDate, rows, totals:{income, expense, change, net} };
+  currentPeriodExport = { period, year, refDate: activeDate, rows, totals:{income, expense, homeExpense, change, net} };
 }
 
 /* ---------- search ---------- */
@@ -482,8 +533,13 @@ function runSearch(query){
     const rec = records[dateKey];
     if(dateKey.includes(query)) found.push({dateKey, text:'ข้อมูลของวันที่ ' + dateKey, amount:null});
     rec.expenses.forEach(e=>{
-      if(e.desc.toLowerCase().includes(query) || e.category.toLowerCase().includes(query)){
-        found.push({dateKey, text: e.desc + ' (' + e.category + ')', amount: e.amount});
+      if(e.desc.toLowerCase().includes(query) || (e.category||'').toLowerCase().includes(query)){
+        found.push({dateKey, text: e.desc + ' (' + (e.category||'ไม่ระบุหมวดหมู่') + ')', amount: e.amount});
+      }
+    });
+    (rec.homeExpenses||[]).forEach(e=>{
+      if(e.desc.toLowerCase().includes(query)){
+        found.push({dateKey, text: e.desc + ' (รายจ่ายเงินบ้าน)', amount: e.amount});
       }
     });
   });
@@ -509,38 +565,38 @@ function buildChartBuckets(period){
       const key = localDateStr(d);
       const rec = records[key] || emptyRecord(key);
       const t = computeTotals(rec);
-      buckets.push({label:(d.getDate()+'/'+(d.getMonth()+1)), income:t.incomeReal, expense:t.totalExpense});
+      buckets.push({label:(d.getDate()+'/'+(d.getMonth()+1)), income:t.incomeReal, expense:t.totalExpense, home:t.totalHomeExpense});
     }
   } else if(period === 'week'){
     for(let i=7;i>=0;i--){
       const d = new Date(active); d.setDate(d.getDate() - i*7);
       const wk = getISOWeekKey(d);
-      let income=0, expense=0;
+      let income=0, expense=0, home=0;
       sortedDates().forEach(key=>{
         const kd = new Date(key+'T00:00:00');
-        if(getISOWeekKey(kd) === wk){ const t = computeTotals(records[key]); income+=t.incomeReal; expense+=t.totalExpense; }
+        if(getISOWeekKey(kd) === wk){ const t = computeTotals(records[key]); income+=t.incomeReal; expense+=t.totalExpense; home+=t.totalHomeExpense; }
       });
-      buckets.push({label:'W'+wk.split('-W')[1], income, expense});
+      buckets.push({label:'W'+wk.split('-W')[1], income, expense, home});
     }
   } else if(period === 'month'){
     for(let i=11;i>=0;i--){
       const d = new Date(active.getFullYear(), active.getMonth()-i, 1);
-      let income=0, expense=0;
+      let income=0, expense=0, home=0;
       sortedDates().forEach(key=>{
         const kd = new Date(key+'T00:00:00');
-        if(kd.getFullYear()===d.getFullYear() && kd.getMonth()===d.getMonth()){ const t = computeTotals(records[key]); income+=t.incomeReal; expense+=t.totalExpense; }
+        if(kd.getFullYear()===d.getFullYear() && kd.getMonth()===d.getMonth()){ const t = computeTotals(records[key]); income+=t.incomeReal; expense+=t.totalExpense; home+=t.totalHomeExpense; }
       });
-      buckets.push({label:MONTH_NAMES_TH[d.getMonth()].slice(0,3), income, expense});
+      buckets.push({label:MONTH_NAMES_TH[d.getMonth()].slice(0,3), income, expense, home});
     }
   } else if(period === 'year'){
     for(let i=4;i>=0;i--){
       const y = active.getFullYear() - i;
-      let income=0, expense=0;
+      let income=0, expense=0, home=0;
       sortedDates().forEach(key=>{
         const kd = new Date(key+'T00:00:00');
-        if(kd.getFullYear()===y){ const t = computeTotals(records[key]); income+=t.incomeReal; expense+=t.totalExpense; }
+        if(kd.getFullYear()===y){ const t = computeTotals(records[key]); income+=t.incomeReal; expense+=t.totalExpense; home+=t.totalHomeExpense; }
       });
-      buckets.push({label:String(y+543), income, expense});
+      buckets.push({label:String(y+543), income, expense, home});
     }
   }
   return buckets;
@@ -556,20 +612,22 @@ function renderChart(){
 
   const totalIncome = buckets.reduce((s,b)=>s+b.income,0);
   const totalExpense = buckets.reduce((s,b)=>s+b.expense,0);
+  const totalHome = buckets.reduce((s,b)=>s+b.home,0);
   document.getElementById('legendIncome').textContent = fmtBaht(totalIncome);
   document.getElementById('legendExpense').textContent = fmtBaht(totalExpense);
+  document.getElementById('legendHome').textContent = fmtBaht(totalHome);
 
   if(chartType === 'bar') drawBarChart(ctx, W, H, buckets);
   else if(chartType === 'line') drawLineChart(ctx, W, H, buckets);
-  else if(chartType === 'pie') drawPieChart(ctx, W, H, totalIncome, totalExpense);
+  else if(chartType === 'pie') drawPieChart(ctx, W, H, totalIncome, totalExpense, totalHome);
 }
 function drawBarChart(ctx, W, H, buckets){
-  const maxVal = Math.max(1, ...buckets.map(d=>Math.max(d.income,d.expense)));
+  const maxVal = Math.max(1, ...buckets.map(d=>Math.max(d.income,d.expense,d.home)));
   const padding = 36;
   const chartW = W - padding*2;
   const chartH = H - padding*2;
   const groupW = chartW / buckets.length;
-  const barW = Math.min(26, groupW * 0.32);
+  const barW = Math.min(18, groupW * 0.22);
 
   ctx.strokeStyle = 'rgba(47,111,237,0.2)';
   ctx.beginPath(); ctx.moveTo(padding, H-padding); ctx.lineTo(W-padding, H-padding); ctx.stroke();
@@ -578,10 +636,13 @@ function drawBarChart(ctx, W, H, buckets){
     const x = padding + i*groupW + groupW/2;
     const incomeH = (d.income/maxVal) * chartH;
     const expenseH = (d.expense/maxVal) * chartH;
+    const homeH = (d.home/maxVal) * chartH;
     ctx.fillStyle = '#0EA968';
-    ctx.fillRect(x - barW - 2, H-padding-incomeH, barW, incomeH);
+    ctx.fillRect(x - barW*1.5 - 3, H-padding-incomeH, barW, incomeH);
     ctx.fillStyle = '#E23744';
-    ctx.fillRect(x + 2, H-padding-expenseH, barW, expenseH);
+    ctx.fillRect(x - barW/2, H-padding-expenseH, barW, expenseH);
+    ctx.fillStyle = '#7C4FE0';
+    ctx.fillRect(x + barW/2 + 3, H-padding-homeH, barW, homeH);
     ctx.fillStyle = '#52627A';
     ctx.font = '10.5px IBM Plex Sans Thai, sans-serif';
     ctx.textAlign = 'center';
@@ -589,7 +650,7 @@ function drawBarChart(ctx, W, H, buckets){
   });
 }
 function drawLineChart(ctx, W, H, buckets){
-  const maxVal = Math.max(1, ...buckets.map(d=>Math.max(d.income,d.expense)));
+  const maxVal = Math.max(1, ...buckets.map(d=>Math.max(d.income,d.expense,d.home)));
   const padding = 36;
   const chartW = W - padding*2;
   const chartH = H - padding*2;
@@ -615,6 +676,7 @@ function drawLineChart(ctx, W, H, buckets){
   }
   drawSeries('income', '#0EA968');
   drawSeries('expense', '#E23744');
+  drawSeries('home', '#7C4FE0');
 
   ctx.fillStyle = '#52627A';
   ctx.font = '10.5px IBM Plex Sans Thai, sans-serif';
@@ -624,9 +686,9 @@ function drawLineChart(ctx, W, H, buckets){
     ctx.fillText(d.label, x, H-padding+16);
   });
 }
-function drawPieChart(ctx, W, H, totalIncome, totalExpense){
+function drawPieChart(ctx, W, H, totalIncome, totalExpense, totalHome){
   const cx = W/2, cy = H/2 - 10, r = Math.min(W,H)/2 - 50;
-  const total = totalIncome + totalExpense;
+  const total = totalIncome + totalExpense + totalHome;
   if(total <= 0){
     ctx.fillStyle = '#52627A';
     ctx.font = '13px IBM Plex Sans Thai, sans-serif';
@@ -634,35 +696,30 @@ function drawPieChart(ctx, W, H, totalIncome, totalExpense){
     ctx.fillText('ยังไม่มีข้อมูลในช่วงนี้', cx, cy);
     return;
   }
-  const incomeAngle = (totalIncome/total) * Math.PI * 2;
-  ctx.beginPath();
-  ctx.moveTo(cx,cy);
-  ctx.arc(cx, cy, r, -Math.PI/2, -Math.PI/2 + incomeAngle);
-  ctx.closePath();
-  ctx.fillStyle = '#0EA968';
-  ctx.fill();
-
-  ctx.beginPath();
-  ctx.moveTo(cx,cy);
-  ctx.arc(cx, cy, r, -Math.PI/2 + incomeAngle, -Math.PI/2 + Math.PI*2);
-  ctx.closePath();
-  ctx.fillStyle = '#E23744';
-  ctx.fill();
-
-  // percentage labels
-  ctx.fillStyle = '#fff';
-  ctx.font = 'bold 13px IBM Plex Sans Thai, sans-serif';
-  ctx.textAlign = 'center';
-  const incomePct = Math.round((totalIncome/total)*100);
-  const expensePct = 100 - incomePct;
-  const midIncomeAngle = -Math.PI/2 + incomeAngle/2;
-  const midExpenseAngle = -Math.PI/2 + incomeAngle + (Math.PI*2 - incomeAngle)/2;
-  if(totalIncome > 0){
-    ctx.fillText(incomePct+'%', cx + Math.cos(midIncomeAngle)*r*0.6, cy + Math.sin(midIncomeAngle)*r*0.6);
-  }
-  if(totalExpense > 0){
-    ctx.fillText(expensePct+'%', cx + Math.cos(midExpenseAngle)*r*0.6, cy + Math.sin(midExpenseAngle)*r*0.6);
-  }
+  const slices = [
+    { value: totalIncome, color: '#0EA968' },
+    { value: totalExpense, color: '#E23744' },
+    { value: totalHome, color: '#7C4FE0' }
+  ];
+  let angle = -Math.PI/2;
+  slices.forEach(s=>{
+    const sweep = (s.value/total) * Math.PI * 2;
+    ctx.beginPath();
+    ctx.moveTo(cx,cy);
+    ctx.arc(cx, cy, r, angle, angle + sweep);
+    ctx.closePath();
+    ctx.fillStyle = s.color;
+    ctx.fill();
+    if(s.value > 0){
+      const mid = angle + sweep/2;
+      const pct = Math.round((s.value/total)*100);
+      ctx.fillStyle = '#fff';
+      ctx.font = 'bold 13px IBM Plex Sans Thai, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText(pct+'%', cx + Math.cos(mid)*r*0.6, cy + Math.sin(mid)*r*0.6);
+    }
+    angle += sweep;
+  });
 }
 
 /* ---------- history panel ---------- */
@@ -696,7 +753,7 @@ function renderHistoryList(){
     div.innerHTML = `
       <div class="hist-info">
         <span class="hist-date">${dateKey}</span>
-        <span class="hist-sub">รับ ${fmtNum(t.totalIncome)} · จ่าย ${fmtNum(t.totalExpense)}</span>
+        <span class="hist-sub">รับ ${fmtNum(t.totalIncome)} · จ่าย ${fmtNum(t.totalExpense)} · บ้าน ${fmtNum(t.totalHomeExpense)}</span>
       </div>
       <div class="hist-actions">
         <span class="hist-net" style="color:${t.net>=0?'#0EA968':'#E23744'}">${fmtNum(t.net)}</span>
@@ -709,19 +766,20 @@ function renderHistoryList(){
 
 /* ---------- export: CSV ---------- */
 function buildCsvRows(){
-  const rows = [['date','income_note','income_coin','income_app','expense_desc','expense_category','expense_amount','change_coin','change_note']];
+  const rows = [['date','income_note','income_coin','income_app','home_expense_desc','home_expense_amount','expense_desc','expense_category','expense_amount','change_coin','change_note']];
   sortedDates().forEach(dateKey=>{
     const rec = records[dateKey];
-    if(rec.expenses.length === 0){
-      rows.push([dateKey, rec.income.note, rec.income.coin, rec.income.app, '', '', '', rec.change.coin, rec.change.note]);
-    }else{
-      rec.expenses.forEach((e, idx)=>{
-        rows.push([
-          dateKey, idx===0?rec.income.note:'', idx===0?rec.income.coin:'', idx===0?rec.income.app:'',
-          e.desc, e.category, e.amount,
-          idx===0?rec.change.coin:'', idx===0?rec.change.note:''
-        ]);
-      });
+    const maxLen = Math.max(rec.expenses.length, (rec.homeExpenses||[]).length, 1);
+    for(let idx=0; idx<maxLen; idx++){
+      const e = rec.expenses[idx];
+      const he = (rec.homeExpenses||[])[idx];
+      rows.push([
+        dateKey,
+        idx===0?rec.income.note:'', idx===0?rec.income.coin:'', idx===0?rec.income.app:'',
+        he ? he.desc : '', he ? he.amount : '',
+        e ? e.desc : '', e ? e.category : '', e ? e.amount : '',
+        idx===0?rec.change.coin:'', idx===0?rec.change.note:''
+      ]);
     }
   });
   return rows;
@@ -795,7 +853,8 @@ function exportPdfDay(){
     ['Total change', t.totalChange],
     ['Real income (income - change)', t.incomeReal],
     ['Total expenses', t.totalExpense],
-    ['Net for the day', t.net],
+    ['Home/capital expenses (deducted from profit)', t.totalHomeExpense],
+    ['Net profit for the day', t.net],
   ];
   lines.forEach(([label, val])=>{
     doc.text(String(label), 14, y);
@@ -813,6 +872,17 @@ function exportPdfDay(){
       y += 7;
     });
   }
+  if(rec.homeExpenses && rec.homeExpenses.length){
+    y += 4;
+    doc.setFontSize(12);
+    doc.text('Home/capital expense items:', 14, y); y += 8;
+    doc.setFontSize(10);
+    rec.homeExpenses.forEach(e=>{
+      doc.text(e.desc, 14, y);
+      doc.text(Number(e.amount).toLocaleString('en-US', {minimumFractionDigits:2}), 180, y, {align:'right'});
+      y += 7;
+    });
+  }
   doc.save(`daily-summary-${activeDate}.pdf`);
   showToast('ส่งออก PDF ใบสรุปรายวันสำเร็จ ✓', 'success');
 }
@@ -824,11 +894,11 @@ function exportPdfPeriod(){
   doc.text('Period Report (Monthly)', 14, 18);
   const rows = filtered.map(rec=>{
     const t = computeTotals(rec);
-    return [rec.date, t.incomeReal.toFixed(2), t.totalExpense.toFixed(2), t.totalChange.toFixed(2), t.net.toFixed(2)];
+    return [rec.date, t.incomeReal.toFixed(2), t.totalExpense.toFixed(2), t.totalHomeExpense.toFixed(2), t.totalChange.toFixed(2), t.net.toFixed(2)];
   });
   doc.autoTable({
     startY: 26,
-    head: [['Date','Real Income','Expense','Change','Net']],
+    head: [['Date','Real Income','Expense','Home/Capital','Change','Net Profit']],
     body: rows,
     styles: { fontSize: 9 }
   });
@@ -849,12 +919,12 @@ function periodExportFilenameBase(){
 function exportPeriodExcel(){
   if(!currentPeriodExport){ showToast('ยังไม่มีข้อมูลสรุปให้ดาวน์โหลด', 'error'); return; }
   const { rows, totals } = currentPeriodExport;
-  const header = ['วันที่ / เดือน','สถานะ','รายรับแท้จริง','รายจ่าย','เงินทอน','สุทธิ'];
+  const header = ['วันที่ / เดือน','สถานะ','รายรับแท้จริง','รายจ่าย','รายจ่ายเงินบ้าน','เงินทอน','กำไรสุทธิ'];
   const body = rows.map(r => r.empty
-    ? [r.label, 'หยุด', '', '', '', '']
-    : [r.label, '', r.t.incomeReal.toFixed(2), r.t.totalExpense.toFixed(2), r.t.totalChange.toFixed(2), r.t.net.toFixed(2)]
+    ? [r.label, 'หยุด', '', '', '', '', '']
+    : [r.label, '', r.t.incomeReal.toFixed(2), r.t.totalExpense.toFixed(2), (r.t.totalHomeExpense||0).toFixed(2), r.t.totalChange.toFixed(2), r.t.net.toFixed(2)]
   );
-  const sheetRows = [header, ...body, [], ['รวมทั้งหมด', '', totals.income.toFixed(2), totals.expense.toFixed(2), totals.change.toFixed(2), totals.net.toFixed(2)]];
+  const sheetRows = [header, ...body, [], ['รวมทั้งหมด', '', totals.income.toFixed(2), totals.expense.toFixed(2), (totals.homeExpense||0).toFixed(2), totals.change.toFixed(2), totals.net.toFixed(2)]];
   const ws = XLSX.utils.aoa_to_sheet(sheetRows);
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, 'รายงาน');
@@ -869,14 +939,14 @@ function exportPeriodPdf(){
   doc.setFontSize(15);
   doc.text('Period Report', 14, 18);
   const body = rows.map(r => r.empty
-    ? [r.label, 'Closed', '-', '-', '-', '-']
-    : [r.label, '', r.t.incomeReal.toFixed(2), r.t.totalExpense.toFixed(2), r.t.totalChange.toFixed(2), r.t.net.toFixed(2)]
+    ? [r.label, 'Closed', '-', '-', '-', '-', '-']
+    : [r.label, '', r.t.incomeReal.toFixed(2), r.t.totalExpense.toFixed(2), (r.t.totalHomeExpense||0).toFixed(2), r.t.totalChange.toFixed(2), r.t.net.toFixed(2)]
   );
   doc.autoTable({
     startY: 26,
-    head: [['Date','Status','Real Income','Expense','Change','Net']],
+    head: [['Date','Status','Real Income','Expense','Home/Capital','Change','Net Profit']],
     body: body,
-    foot: [['Total','', totals.income.toFixed(2), totals.expense.toFixed(2), totals.change.toFixed(2), totals.net.toFixed(2)]],
+    foot: [['Total','', totals.income.toFixed(2), totals.expense.toFixed(2), (totals.homeExpense||0).toFixed(2), totals.change.toFixed(2), totals.net.toFixed(2)]],
     styles: { fontSize: 8 }
   });
   doc.save(periodExportFilenameBase() + '.pdf');
@@ -916,7 +986,7 @@ async function importCsvFile(file){
   const mode = await chooseImportMode(
     'นำเข้าข้อมูล CSV',
     `พบข้อมูล <b>${affectedDates.size} วัน</b> ในไฟล์<br><br>
-     <b>➕ รวมข้อมูล</b> — เก็บข้อมูลเดิมไว้ รายรับ/เงินทอนจะถูกบวกเพิ่มจากของเดิม รายจ่ายจะถูกเพิ่มต่อท้าย<br><br>
+     <b>➕ รวมข้อมูล</b> — เก็บข้อมูลเดิมไว้ รายรับ/เงินทอนจะถูกบวกเพิ่มจากของเดิม รายจ่าย/รายจ่ายเงินบ้านจะถูกเพิ่มต่อท้าย<br><br>
      <b>♻️ บันทึกทับ</b> — ลบข้อมูลเดิมของวันที่ตรงกันออกก่อน แล้วใส่ข้อมูลจาก CSV แทนทั้งหมด (ป้องกันรายการซ้ำเวลานำเข้าไฟล์เดิมซ้ำ)`
   );
   if(!mode) return;
@@ -927,7 +997,7 @@ async function importCsvFile(file){
 
   lastDate = null;
   rows.forEach(cols=>{
-    const [date, incNote, incCoin, incApp, expDesc, expCat, expAmt, chCoin, chNote] = cols;
+    const [date, incNote, incCoin, incApp, homeDesc, homeAmt, expDesc, expCat, expAmt, chCoin, chNote] = cols;
     const d = date && date.trim() ? date.trim() : lastDate;
     if(!d) return;
     lastDate = d;
@@ -947,6 +1017,9 @@ async function importCsvFile(file){
     }
     if(expDesc && expDesc.trim()){
       rec.expenses.push({ id: uid(), desc: expDesc.trim(), category:(expCat||'ไม่ระบุ').trim(), amount: parseFloat(expAmt)||0 });
+    }
+    if(homeDesc && homeDesc.trim()){
+      rec.homeExpenses.push({ id: uid(), desc: homeDesc.trim(), amount: parseFloat(homeAmt)||0 });
     }
   });
   saveAll();
@@ -1018,6 +1091,12 @@ document.addEventListener('DOMContentLoaded', ()=>{
   document.getElementById('expenseList').addEventListener('click', (e)=>{
     const id = e.target.getAttribute('data-del');
     if(id) deleteExpense(id);
+  });
+
+  document.getElementById('addHomeExpenseBtn').addEventListener('click', addHomeExpense);
+  document.getElementById('homeExpenseList').addEventListener('click', (e)=>{
+    const id = e.target.getAttribute('data-del-home');
+    if(id) deleteHomeExpense(id);
   });
 
   // tap to toggle zoom — stays zoomed until tapped again

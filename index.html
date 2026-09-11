@@ -118,6 +118,7 @@
     <div class="chart-legend">
       <span><i class="dot income"></i> รายรับ (ไม่รวมเงินทอน) <b id="legendIncome">0</b></span>
       <span><i class="dot expense"></i> รายจ่าย <b id="legendExpense">0</b></span>
+      <span><i class="dot home"></i> เงินบ้าน (ต้นทุน) <b id="legendHome">0</b></span>
     </div>
     <canvas id="chartCanvas" width="600" height="320"></canvas>
   </div>
@@ -182,7 +183,13 @@
     </div>
     <div class="hero-divider"></div>
     <div class="hero-stat">
-      <div class="hero-icon-label net"><span class="hero-icon">💳</span> สุทธิ</div>
+      <div class="hero-icon-label capital"><span class="hero-icon">🏠</span> เงินบ้าน (ต้นทุน)</div>
+      <div class="hero-number capital zoomable floaty" id="cardHomeExpense">0</div>
+      <div class="hero-unit">บาท</div>
+    </div>
+    <div class="hero-divider"></div>
+    <div class="hero-stat">
+      <div class="hero-icon-label net"><span class="hero-icon">💳</span> กำไรสุทธิ</div>
       <div class="hero-number net zoomable floaty-net" id="cardNet">0</div>
       <div class="hero-unit">บาท</div>
     </div>
@@ -220,17 +227,46 @@
     </div>
   </section>
 
-  <!-- ===== FORM 2: รายจ่าย ===== -->
-  <section class="form-card glass" data-card="expense">
+  <!-- ===== FORM 2: รายจ่ายเงินบ้าน (ต้นทุน/เงินลงทุน) ===== -->
+  <section class="form-card glass" data-card="homeexpense">
     <div class="card-header">
       <div class="card-header-left">
         <span class="step-tab">2</span>
+        <h2>รายจ่ายเงินบ้าน</h2>
+        <span class="chip carry-chip" id="chipHomeExpense">0 ฿</span>
+      </div>
+      <button class="chevron-btn" aria-label="ย่อ/ขยาย"><svg viewBox="0 0 24 24"><polyline points="6 9 12 15 18 9"/></svg></button>
+    </div>
+    <div class="card-body">
+      <p class="sub-note">เงินส่วนนี้ไม่ใช่รายได้จากการขาย แต่จะหักออกจากกำไรสุทธิ เพื่อให้เห็นกำไรที่แท้จริง</p>
+      <div id="homeExpenseList" class="expense-list"></div>
+      <div class="field-grid expense-input-row">
+        <div class="field-row">
+          <label>รายการ</label>
+          <input type="text" id="homeExpenseDesc" placeholder="เช่น ค่าซ่อมบ้าน, เงินลงทุนเพิ่ม">
+        </div>
+        <div class="field-row">
+          <label>จำนวนเงิน</label>
+          <input type="number" id="homeExpenseAmount" step="0.01" placeholder="0.00">
+        </div>
+      </div>
+      <button class="save-btn" id="addHomeExpenseBtn">✓ บันทึกรายจ่ายเงินบ้าน</button>
+      <div class="total-line">รวมรายจ่ายเงินบ้าน: <span id="homeExpenseTotal">฿0.00</span></div>
+    </div>
+  </section>
+
+  <!-- ===== FORM 3: รายจ่าย ===== -->
+  <section class="form-card glass" data-card="expense">
+    <div class="card-header">
+      <div class="card-header-left">
+        <span class="step-tab">3</span>
         <h2>รายจ่าย</h2>
         <span class="chip expense-chip" id="chipExpense">0 ฿</span>
       </div>
       <button class="chevron-btn" aria-label="ย่อ/ขยาย"><svg viewBox="0 0 24 24"><polyline points="6 9 12 15 18 9"/></svg></button>
     </div>
     <div class="card-body">
+      <p class="sub-note">เงินที่ใช้ซื้อของระหว่างวันจากยอดขายที่ได้รับ จะถูกหักออกจากรายรับแท้จริงเพื่อคำนวณกำไร</p>
       <div id="expenseList" class="expense-list"></div>
       <div class="field-grid expense-input-row">
         <div class="field-row">
@@ -264,7 +300,7 @@
   <section class="form-card glass" data-card="change">
     <div class="card-header">
       <div class="card-header-left">
-        <span class="step-tab">3</span>
+        <span class="step-tab">4</span>
         <h2>เงินทอน</h2>
         <span class="chip change-chip" id="chipChange">0 ฿</span>
       </div>
