@@ -9,7 +9,10 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
-<link rel="stylesheet" href="style.css">
+<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+<meta http-equiv="Pragma" content="no-cache">
+<meta http-equiv="Expires" content="0">
+<link rel="stylesheet" href="style.css?v=20260911">
 </head>
 <body>
 
@@ -170,25 +173,22 @@
 
   <!-- ===== HERO STATS CARD ===== -->
   <section class="hero-card glass">
-    <div class="hero-stat">
+    <div class="hero-stat hs-income">
       <div class="hero-icon-label income"><span class="hero-icon">↗</span> รายรับแท้จริง</div>
       <div class="hero-number income zoomable floaty" id="cardIncomeReal">0</div>
       <div class="hero-unit">บาท</div>
     </div>
-    <div class="hero-divider"></div>
-    <div class="hero-stat">
+    <div class="hero-stat hs-expense">
       <div class="hero-icon-label expense"><span class="hero-icon">↘</span> รายจ่าย</div>
       <div class="hero-number expense zoomable floaty" id="cardExpense">0</div>
       <div class="hero-unit">บาท</div>
     </div>
-    <div class="hero-divider"></div>
-    <div class="hero-stat">
+    <div class="hero-stat hs-capital">
       <div class="hero-icon-label capital"><span class="hero-icon">🏠</span> เงินบ้าน (ต้นทุน)</div>
       <div class="hero-number capital zoomable floaty" id="cardHomeExpense">0</div>
       <div class="hero-unit">บาท</div>
     </div>
-    <div class="hero-divider"></div>
-    <div class="hero-stat">
+    <div class="hero-stat hs-net">
       <div class="hero-icon-label net"><span class="hero-icon">💳</span> กำไรสุทธิ</div>
       <div class="hero-number net zoomable floaty-net" id="cardNet">0</div>
       <div class="hero-unit">บาท</div>
@@ -353,6 +353,6 @@
 
 </main>
 
-<script src="app.js"></script>
+<script src="app.js?v=20260911"></script>
 </body>
 </html>
