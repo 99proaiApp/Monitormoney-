@@ -7,6 +7,24 @@ const TITLE_KEY = 'moneyflow_app_title_v1';
 const DAY_NAMES_TH = ['วันอาทิตย์','วันจันทร์','วันอังคาร','วันพุธ','วันพฤหัสบดี','วันศุกร์','วันเสาร์'];
 const MONTH_NAMES_TH = ['มกราคม','กุมภาพันธ์','มีนาคม','เมษายน','พฤษภาคม','มิถุนายน','กรกฎาคม','สิงหาคม','กันยายน','ตุลาคม','พฤศจิกายน','ธันวาคม'];
 
+/* ---------- firebase (auth + cloud sync) ---------- */
+const firebaseConfig = {
+  apiKey: "AIzaSyCBozEEkbcISy7LGlIyK9QDe9FMlW3Erbg",
+  authDomain: "money-tracker-add3e.firebaseapp.com",
+  projectId: "money-tracker-add3e",
+  storageBucket: "money-tracker-add3e.firebasestorage.app",
+  messagingSenderId: "128919236204",
+  appId: "1:128919236204:web:76c220f25f02d06a7c7249"
+};
+firebase.initializeApp(firebaseConfig);
+const auth = firebase.auth();
+const db = firebase.firestore();
+// keep the session saved on this device so refreshing never forces a re-login
+auth.setPersistence(firebase.auth.Auth.Persistence.LOCAL).catch(()=>{});
+let currentUser = null;
+let cloudSyncTimer = null;
+let appStarted = false;
+
 let records = {};
 let activeDate = todayStr();
 let chartPeriod = 'day';
@@ -43,9 +61,105 @@ function thaiDate(dateStr){
 function loadAll(){
   try{ records = JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}'); }catch(e){ records = {}; }
 }
-function saveAll(){ localStorage.setItem(STORAGE_KEY, JSON.stringify(records)); }
+function saveAll(){
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(records));
+  queueCloudSync();
+}
+
+/* ---------- cloud sync (Firestore: ONE shared document for everyone) ---------- */
+const SHARED_DOC_REF = () => db.collection('shared').doc('moneybook');
+function queueCloudSync(){
+  if(!currentUser) return;
+  if(cloudSyncTimer) clearTimeout(cloudSyncTimer);
+  cloudSyncTimer = setTimeout(()=>{
+    SHARED_DOC_REF().set({ records, updatedBy: currentUser.email, updatedAt: new Date().toISOString() })
+      .catch(e=> console.error('บันทึกข้อมูลขึ้น Firebase ไม่สำเร็จ:', e));
+  }, 800);
+}
+async function loadRecordsFromCloud(){
+  try{
+    const doc = await SHARED_DOC_REF().get();
+    if(doc.exists && doc.data().records){
+      records = doc.data().records;
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(records));
+    } else {
+      // first time ever — migrate whatever's in this device's localStorage up to the shared cloud doc
+      loadAll();
+      await SHARED_DOC_REF().set({ records, updatedBy: currentUser.email, updatedAt: new Date().toISOString() });
+    }
+  }catch(e){
+    console.error('โหลดข้อมูลจาก Firebase ไม่สำเร็จ ใช้ข้อมูลในเครื่องไปก่อน:', e);
+    loadAll();
+  }
+  // live sync: whenever anyone (any device/account) saves, everyone's screen updates automatically
+  SHARED_DOC_REF().onSnapshot((doc)=>{
+    if(!doc.exists) return;
+    const incoming = doc.data();
+    if(incoming.updatedBy === (currentUser && currentUser.email)) return; // this was our own write, already applied locally
+    records = incoming.records || {};
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(records));
+    if(appStarted){ renderForm(); populateHistoryYears(); }
+  });
+}
+
+/* ---------- auth UI ---------- */
+function authErrorMessage(code){
+  const map = {
+    'auth/invalid-email':'อีเมลไม่ถูกต้อง',
+    'auth/user-not-found':'ไม่พบบัญชีนี้ ลองสมัครสมาชิกใหม่',
+    'auth/wrong-password':'รหัสผ่านไม่ถูกต้อง',
+    'auth/invalid-credential':'อีเมลหรือรหัสผ่านไม่ถูกต้อง',
+    'auth/user-disabled':'บัญชีนี้ถูกระงับการใช้งาน ติดต่อเจ้าของระบบ',
+    'auth/email-already-in-use':'อีเมลนี้ถูกใช้แล้ว ลองเข้าสู่ระบบแทน',
+    'auth/weak-password':'รหัสผ่านต้องมีอย่างน้อย 6 ตัวอักษร',
+    'auth/too-many-requests':'ลองผิดหลายครั้งเกินไป กรุณารอสักครู่แล้วลองใหม่'
+  };
+  return map[code] || 'เกิดข้อผิดพลาด กรุณาลองใหม่อีกครั้ง';
+}
+function wireAuthUI(){
+  const emailInput = document.getElementById('authEmail');
+  const passInput = document.getElementById('authPassword');
+  const errorEl = document.getElementById('authError');
+  const loadingEl = document.getElementById('authLoading');
+  const setError = (msg)=> errorEl.textContent = msg;
+
+  document.getElementById('authLoginBtn').addEventListener('click', ()=>{
+    setError('');
+    const email = emailInput.value.trim(), pass = passInput.value;
+    if(!email || !pass) return setError('กรุณากรอกอีเมลและรหัสผ่าน');
+    loadingEl.hidden = false;
+    auth.signInWithEmailAndPassword(email, pass)
+      .catch(err=> setError(authErrorMessage(err.code)))
+      .finally(()=> loadingEl.hidden = true);
+  });
+  const logoutBtn = document.getElementById('btnLogout');
+  if(logoutBtn) logoutBtn.addEventListener('click', ()=>{ auth.signOut(); });
+
+  // eye icon: press to reveal/hide the typed password
+  const eyeBtn = document.getElementById('authEyeBtn');
+  const passWrap = document.getElementById('authPassWrap');
+  eyeBtn.addEventListener('click', ()=>{
+    const revealing = passInput.type === 'password';
+    passInput.type = revealing ? 'text' : 'password';
+    passWrap.classList.toggle('visible', revealing);
+  });
+
+  auth.onAuthStateChanged(async (user)=>{
+    currentUser = user;
+    // Firebase has now told us for certain whether we're logged in — safe to
+    // drop the splash and show either the app or the login form, with no flash.
+    document.getElementById('authSplash').classList.add('hidden');
+    if(user){
+      document.getElementById('authOverlay').classList.remove('open');
+      await loadRecordsFromCloud();
+      startApp();
+    } else {
+      document.getElementById('authOverlay').classList.add('open');
+    }
+  });
+}
 function emptyRecord(date){
-  return { date, income:{note:0,coin:0,app:0}, expenses:[], homeExpenses:[], change:{coin:0,note:0} };
+  return { date, income:{note:0,coin:0,app:0}, expenses:[], capital:[], change:{coin:0,note:0} };
 }
 function getRecord(date){
   if(!records[date]) records[date] = emptyRecord(date);
@@ -53,7 +167,7 @@ function getRecord(date){
   if(!records[date].change) records[date].change = {coin:0, note:0};
   if(!records[date].income) records[date].income = {note:0, coin:0, app:0};
   if(!records[date].expenses) records[date].expenses = [];
-  if(!records[date].homeExpenses) records[date].homeExpenses = [];
+  if(!records[date].capital) records[date].capital = [];
   return records[date];
 }
 function sortedDates(){ return Object.keys(records).sort(); }
@@ -61,39 +175,88 @@ function previousDate(date){
   const dates = sortedDates().filter(d => d < date);
   return dates.length ? dates[dates.length-1] : null;
 }
+// stamp who last touched a day's record + when, so shared/central data can show "who edited what"
+function stampEditor(rec){
+  if(currentUser){
+    rec.lastEditedBy = currentUser.email;
+    rec.lastEditedAt = new Date().toISOString();
+  }
+}
 
 /* ---------- computed totals ---------- */
 function computeTotals(rec){
   const totalIncome = (rec.income.note||0) + (rec.income.coin||0) + (rec.income.app||0);
   const totalExpense = rec.expenses.reduce((s,e)=> s + (e.amount||0), 0);
-  const totalHomeExpense = (rec.homeExpenses||[]).reduce((s,e)=> s + (e.amount||0), 0);
+  const totalCapital = (rec.capital||[]).reduce((s,c)=> s + (c.amount||0), 0);
   const totalChange = (rec.change.coin||0) + (rec.change.note||0);
   const incomeReal = totalIncome - totalChange;
-  const net = incomeReal - totalExpense - totalHomeExpense;
-  return { totalIncome, totalExpense, totalHomeExpense, totalChange, incomeReal, net };
+  // กำไรสุทธิแท้จริง: หักทั้งรายจ่ายและทุนลงของ/เงินบ้านออกจากรายรับแท้จริง
+  const net = incomeReal - totalExpense - totalCapital;
+  return { totalIncome, totalExpense, totalCapital, totalChange, incomeReal, net };
 }
-// รายได้สุทธิของเดือน = ผลรวม (รายรับ - รายจ่าย - เงินทอน) ของทุกวันในเดือนนั้น
-function monthlyNetTotal(dateStr){
+// สรุปยอดของเดือน (รายรับแท้จริง / รายจ่าย / สุทธิ) รวมทุกวันในเดือนนั้น
+function monthlyTotals(dateStr){
   const d = new Date(dateStr + 'T00:00:00');
-  let total = 0;
+  let income=0, expense=0, net=0;
   sortedDates().forEach(key=>{
     const kd = new Date(key + 'T00:00:00');
     if(kd.getFullYear() === d.getFullYear() && kd.getMonth() === d.getMonth()){
       const t = computeTotals(records[key]);
-      total += t.net;
+      income += t.incomeReal; expense += t.totalExpense; net += t.net;
     }
   });
-  return total;
+  return { income, expense, net };
 }
+function monthlyNetTotal(dateStr){ return monthlyTotals(dateStr).net; }
 
 /* ---------- toast ---------- */
-function showToast(message, type='success'){
+function showToast(message, type='success', action=null){
   const container = document.getElementById('toast-container');
   const el = document.createElement('div');
-  el.className = 'toast ' + type;
-  el.textContent = message;
+  el.className = 'toast ' + type + (action ? ' with-action' : '');
+  const span = document.createElement('span');
+  span.textContent = message;
+  el.appendChild(span);
+  if(action){
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'toast-action';
+    btn.textContent = action.label;
+    btn.addEventListener('click', (ev)=>{
+      ev.stopPropagation();
+      el.remove();
+      action.onClick();
+    });
+    el.appendChild(btn);
+  }
   container.appendChild(el);
-  setTimeout(()=> el.remove(), 2600);
+  setTimeout(()=> el.remove(), action ? 5000 : 2600);
+}
+
+/* ---------- undo (snapshot single-day record before mutating it) ---------- */
+function snapshotRecord(date){
+  const rec = records[date];
+  return rec ? JSON.parse(JSON.stringify(rec)) : null;
+}
+function restoreRecordSnapshot(date, snapshot){
+  if(snapshot === null) delete records[date];
+  else records[date] = snapshot;
+  saveAll();
+  populateHistoryYears();
+  renderForm();
+  refreshOpenCardHeight();
+  showToast('เลิกทำแล้ว ✓ คืนค่าข้อมูลเดิม', 'success');
+}
+function snapshotAllRecords(){
+  return JSON.parse(JSON.stringify(records));
+}
+function restoreAllRecords(snapshot){
+  records = snapshot;
+  saveAll();
+  populateHistoryYears();
+  renderForm();
+  refreshOpenCardHeight();
+  showToast('เลิกทำแล้ว ✓ คืนค่าข้อมูลเดิมทั้งหมด', 'success');
 }
 
 /* ---------- confirm modal (generic, promise-based) ---------- */
@@ -165,7 +328,7 @@ function renderForm(){
   document.getElementById('changeNote').value = rec.change.note || '';
 
   renderExpenseList(rec);
-  renderHomeExpenseList(rec);
+  renderCapitalList(rec);
   renderCards(rec);
   renderDateUI();
 }
@@ -179,7 +342,7 @@ function renderExpenseList(rec){
     div.innerHTML = `
       <div class="ei-info">
         <span>${escapeHtml(e.desc)}</span>
-        <span class="ei-cat">${escapeHtml(e.category || 'ไม่ระบุหมวดหมู่')}</span>
+        <span class="ei-cat">${escapeHtml(e.category)}</span>
       </div>
       <div style="display:flex;align-items:center;">
         <span class="ei-amount">${fmtBaht(e.amount)}</span>
@@ -190,23 +353,23 @@ function renderExpenseList(rec){
   document.getElementById('expenseTotal').textContent = fmtBaht(rec.expenses.reduce((s,e)=>s+e.amount,0));
 }
 
-function renderHomeExpenseList(rec){
-  const list = document.getElementById('homeExpenseList');
+function renderCapitalList(rec){
+  const list = document.getElementById('capitalList');
   list.innerHTML = '';
-  (rec.homeExpenses||[]).forEach(e=>{
+  (rec.capital||[]).forEach(c=>{
     const div = document.createElement('div');
     div.className = 'expense-item';
     div.innerHTML = `
       <div class="ei-info">
-        <span>${escapeHtml(e.desc)}</span>
+        <span>${escapeHtml(c.desc)}</span>
       </div>
       <div style="display:flex;align-items:center;">
-        <span class="ei-amount">${fmtBaht(e.amount)}</span>
-        <button class="ei-del" data-del-home="${e.id}" aria-label="ลบรายการ">✕</button>
+        <span class="ei-amount">${fmtBaht(c.amount)}</span>
+        <button class="ei-del" data-delcap="${c.id}" aria-label="ลบรายการ">✕</button>
       </div>`;
     list.appendChild(div);
   });
-  document.getElementById('homeExpenseTotal').textContent = fmtBaht((rec.homeExpenses||[]).reduce((s,e)=>s+e.amount,0));
+  document.getElementById('capitalTotal').textContent = fmtBaht((rec.capital||[]).reduce((s,c)=>s+c.amount,0));
 }
 
 function escapeHtml(s){ const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
@@ -215,22 +378,22 @@ function renderCards(rec){
   const t = computeTotals(rec);
   document.getElementById('cardIncomeReal').textContent = fmtNum(t.incomeReal);
   document.getElementById('cardExpense').textContent = fmtNum(t.totalExpense);
-  document.getElementById('cardHomeExpense').textContent = fmtNum(t.totalHomeExpense);
+  document.getElementById('cardCapital').textContent = fmtNum(t.totalCapital);
   document.getElementById('cardNet').textContent = fmtNum(t.net);
   document.getElementById('heroCaption').innerHTML =
-    `เงินทอน <b>${fmtNum(t.totalChange)} ฿</b> — (รายรับ ${fmtNum(t.totalIncome)} – ${fmtNum(t.totalChange)} = รายรับแท้จริง ${fmtNum(t.incomeReal)} ฿) · เงินบ้าน <b>${fmtNum(t.totalHomeExpense)} ฿</b> หักออกจากกำไรโดยตรง`;
+    `เงินทอน <b>${fmtNum(t.totalChange)} ฿</b> — (รายรับ ${fmtNum(t.totalIncome)} – ${fmtNum(t.totalChange)} = รายรับแท้จริง ${fmtNum(t.incomeReal)} ฿) · เงินบ้าน ${fmtNum(t.totalCapital)} ฿ หักออกจากกำไรโดยตรง`;
 
   document.getElementById('chipIncome').textContent = fmtNum(t.totalIncome) + ' ฿';
   document.getElementById('chipExpense').textContent = fmtNum(t.totalExpense) + ' ฿';
-  document.getElementById('chipHomeExpense').textContent = fmtNum(t.totalHomeExpense) + ' ฿';
+  document.getElementById('chipCapital').textContent = fmtNum(t.totalCapital) + ' ฿';
   document.getElementById('chipChange').textContent = fmtNum(t.totalChange) + ' ฿';
 
   document.getElementById('incomeTotal').textContent = fmtBaht(t.totalIncome);
   document.getElementById('changeTotal').textContent = fmtBaht(t.totalChange);
 
-  const monthTotal = monthlyNetTotal(activeDate);
+  const monthNow = monthlyTotals(activeDate);
   const d = new Date(activeDate + 'T00:00:00');
-  document.getElementById('cardMonthlyNet').textContent = fmtBaht(monthTotal);
+  document.getElementById('cardMonthlyNet').textContent = fmtBaht(monthNow.net);
   document.getElementById('monthlyNetCaption').textContent =
     `รวมรายรับหักรายจ่าย เงินบ้าน และเงินทอน ของเดือน${MONTH_NAMES_TH[d.getMonth()]} ${d.getFullYear()+543}`;
 }
@@ -243,47 +406,98 @@ function pulseButton(el){
   el.classList.add('pulse');
   el.addEventListener('animationend', ()=> el.classList.remove('pulse'), {once:true});
 }
-/* soft tap ripple on every save button, immediate feedback on press */
-function spawnRipple(btn, evt){
-  const rect = btn.getBoundingClientRect();
-  const size = Math.max(rect.width, rect.height) * 1.1;
-  const x = (evt && evt.clientX ? evt.clientX - rect.left : rect.width/2) - size/2;
-  const y = (evt && evt.clientY ? evt.clientY - rect.top : rect.height/2) - size/2;
-  const span = document.createElement('span');
-  span.className = 'ripple';
-  span.style.width = size + 'px';
-  span.style.height = size + 'px';
-  span.style.left = x + 'px';
-  span.style.top = y + 'px';
-  btn.appendChild(span);
-  setTimeout(()=> span.remove(), 500);
+
+/* ---------- dark mode ---------- */
+function applyTheme(mode){
+  if(mode === 'dark') document.documentElement.setAttribute('data-theme','dark');
+  else document.documentElement.removeAttribute('data-theme');
 }
-document.addEventListener('click', (e)=>{
-  const btn = e.target.closest('.save-btn');
-  if(btn) spawnRipple(btn, e);
-});
+function initTheme(){
+  const saved = localStorage.getItem('themeMode');
+  applyTheme(saved === 'dark' ? 'dark' : 'light');
+  document.getElementById('btnTheme').addEventListener('click', ()=>{
+    const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+    const next = isDark ? 'light' : 'dark';
+    applyTheme(next);
+    localStorage.setItem('themeMode', next);
+    playTone('click');
+  });
+}
+
+/* ---------- sound effects (synthesized, works fully offline) ---------- */
+let audioCtx = null;
+let soundEnabled = true;
+function initSound(){
+  const saved = localStorage.getItem('soundEnabled');
+  soundEnabled = saved === null ? true : saved === '1';
+  updateSoundIcon();
+  document.getElementById('btnSound').addEventListener('click', ()=>{
+    soundEnabled = !soundEnabled;
+    localStorage.setItem('soundEnabled', soundEnabled ? '1' : '0');
+    updateSoundIcon();
+    if(soundEnabled) playTone('click');
+  });
+  // gentle tap feedback on the app's main interactive controls
+  document.addEventListener('click', (e)=>{
+    const el = e.target.closest('.save-btn, .ghost-btn, .period-btn, .chevron-btn, .modal-btn, .icon-btn, .hist-btn, .ei-del, .date-nav, .today-pill, .toast-action');
+    if(el) playTone('click');
+  }, true);
+}
+function updateSoundIcon(){
+  document.getElementById('btnSound').classList.toggle('muted', !soundEnabled);
+}
+function playTone(kind){
+  if(!soundEnabled) return;
+  try{
+    if(!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    if(audioCtx.state === 'suspended') audioCtx.resume();
+    const now = audioCtx.currentTime;
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+    osc.connect(gain); gain.connect(audioCtx.destination);
+    let f1 = 880, f2 = 1180, dur = 0.09, peak = 0.05;
+    if(kind === 'success'){ f1 = 740; f2 = 1040; dur = 0.17; peak = 0.16; }
+    else if(kind === 'delete'){ f1 = 520; f2 = 300; dur = 0.15; peak = 0.14; }
+    else if(kind === 'click'){ f1 = 600; f2 = 600; dur = 0.045; peak = 0.05; }
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(f1, now);
+    osc.frequency.exponentialRampToValueAtTime(f2, now + dur*0.6);
+    gain.gain.setValueAtTime(0.0001, now);
+    gain.gain.exponentialRampToValueAtTime(peak, now + 0.012);
+    gain.gain.exponentialRampToValueAtTime(0.0001, now + dur);
+    osc.start(now); osc.stop(now + dur + 0.02);
+  }catch(e){ /* audio not available — fail silently */ }
+}
 
 /* ---------- save handlers (all confirm-gated) ---------- */
 async function saveIncome(){
   const ok = await confirmAction('ยืนยันบันทึกรายรับ', dateAwareMessage('ต้องการบันทึกรายรับใช่หรือไม่?'));
   if(!ok) return;
+  const snapshot = snapshotRecord(activeDate);
+  const snapDate = activeDate;
   const rec = getRecord(activeDate);
   rec.income.note = num('incomeNote');
   rec.income.coin = num('incomeCoin');
   rec.income.app = num('incomeApp');
+  stampEditor(rec);
   saveAll(); renderCards(rec);
   pulseButton(document.querySelector('[data-save="income"]'));
-  showToast('บันทึกรายรับสำเร็จ ✓', 'success');
+  playTone('success');
+  showToast('บันทึกรายรับสำเร็จ ✓', 'success', { label:'เลิกทำ', onClick: ()=> restoreRecordSnapshot(snapDate, snapshot) });
 }
 async function saveChange(){
   const ok = await confirmAction('ยืนยันบันทึกเงินทอน', dateAwareMessage('ต้องการบันทึกเงินทอนใช่หรือไม่?'));
   if(!ok) return;
+  const snapshot = snapshotRecord(activeDate);
+  const snapDate = activeDate;
   const rec = getRecord(activeDate);
   rec.change.coin = num('changeCoin');
   rec.change.note = num('changeNote');
+  stampEditor(rec);
   saveAll(); renderCards(rec);
   pulseButton(document.querySelector('[data-save="change"]'));
-  showToast('บันทึกเงินทอนสำเร็จ ✓', 'success');
+  playTone('success');
+  showToast('บันทึกเงินทอนสำเร็จ ✓', 'success', { label:'เลิกทำ', onClick: ()=> restoreRecordSnapshot(snapDate, snapshot) });
 }
 async function addExpense(){
   const desc = document.getElementById('expenseDesc').value.trim();
@@ -301,8 +515,11 @@ async function addExpense(){
   }
   const ok = await confirmAction('ยืนยันเพิ่มรายจ่าย', dateAwareMessage(`เพิ่มรายการ "${desc}" จำนวน ${fmtBaht(amount)} ใช่หรือไม่?`));
   if(!ok) return;
+  const snapshot = snapshotRecord(activeDate);
+  const snapDate = activeDate;
   const rec = getRecord(activeDate);
-  rec.expenses.push({ id: uid(), desc, category, amount });
+  rec.expenses.push({ id: uid(), desc, category, amount, by: currentUser ? currentUser.email : '' });
+  stampEditor(rec);
   saveAll(); renderExpenseList(rec); renderCards(rec);
   document.getElementById('expenseDesc').value = '';
   document.getElementById('expenseAmount').value = '';
@@ -310,41 +527,54 @@ async function addExpense(){
   document.getElementById('expenseCategoryCustom').hidden = true;
   document.getElementById('expenseCategoryCustom').value = '';
   pulseButton(document.getElementById('addExpenseBtn'));
-  showToast('บันทึกรายการรายจ่ายสำเร็จ ✓', 'success');
+  playTone('success');
+  showToast('บันทึกรายการรายจ่ายสำเร็จ ✓', 'success', { label:'เลิกทำ', onClick: ()=> restoreRecordSnapshot(snapDate, snapshot) });
 }
 async function deleteExpense(id){
   const ok = await confirmAction('ยืนยันการลบ', dateAwareMessage('ต้องการลบรายการนี้ใช่หรือไม่?'));
   if(!ok) return;
+  const snapshot = snapshotRecord(activeDate);
+  const snapDate = activeDate;
   const rec = getRecord(activeDate);
   rec.expenses = rec.expenses.filter(e => e.id !== id);
+  stampEditor(rec);
   saveAll(); renderExpenseList(rec); renderCards(rec);
-  showToast('ลบรายการสำเร็จ ✓', 'error');
+  playTone('delete');
+  showToast('ลบรายการสำเร็จ ✓', 'error', { label:'เลิกทำ', onClick: ()=> restoreRecordSnapshot(snapDate, snapshot) });
 }
 
-async function addHomeExpense(){
-  const desc = document.getElementById('homeExpenseDesc').value.trim();
-  const amount = num('homeExpenseAmount');
+async function addCapital(){
+  const desc = document.getElementById('capitalDesc').value.trim();
+  const amount = num('capitalAmount');
   if(!desc || amount <= 0){
     showToast('กรุณากรอกรายการและจำนวนเงินให้ถูกต้อง', 'error');
     return;
   }
-  const ok = await confirmAction('ยืนยันบันทึกรายจ่ายเงินบ้าน', dateAwareMessage(`บันทึกรายการ "${desc}" จำนวน ${fmtBaht(amount)} เป็นรายจ่ายเงินบ้าน (จะหักออกจากกำไรสุทธิ ไม่นับเป็นรายรับ) ใช่หรือไม่?`));
+  const ok = await confirmAction('ยืนยันเพิ่มรายจ่ายเงินบ้าน', dateAwareMessage(`เพิ่มรายการ "${desc}" จำนวน ${fmtBaht(amount)} ใช่หรือไม่?`));
   if(!ok) return;
+  const snapshot = snapshotRecord(activeDate);
+  const snapDate = activeDate;
   const rec = getRecord(activeDate);
-  rec.homeExpenses.push({ id: uid(), desc, amount });
-  saveAll(); renderHomeExpenseList(rec); renderCards(rec);
-  document.getElementById('homeExpenseDesc').value = '';
-  document.getElementById('homeExpenseAmount').value = '';
-  pulseButton(document.getElementById('addHomeExpenseBtn'));
-  showToast('บันทึกรายจ่ายเงินบ้านสำเร็จ ✓', 'success');
+  rec.capital.push({ id: uid(), desc, amount, by: currentUser ? currentUser.email : '' });
+  stampEditor(rec);
+  saveAll(); renderCapitalList(rec); renderCards(rec);
+  document.getElementById('capitalDesc').value = '';
+  document.getElementById('capitalAmount').value = '';
+  pulseButton(document.getElementById('addCapitalBtn'));
+  playTone('success');
+  showToast('บันทึกรายจ่ายเงินบ้านสำเร็จ ✓', 'success', { label:'เลิกทำ', onClick: ()=> restoreRecordSnapshot(snapDate, snapshot) });
 }
-async function deleteHomeExpense(id){
+async function deleteCapital(id){
   const ok = await confirmAction('ยืนยันการลบ', dateAwareMessage('ต้องการลบรายการนี้ใช่หรือไม่?'));
   if(!ok) return;
+  const snapshot = snapshotRecord(activeDate);
+  const snapDate = activeDate;
   const rec = getRecord(activeDate);
-  rec.homeExpenses = rec.homeExpenses.filter(e => e.id !== id);
-  saveAll(); renderHomeExpenseList(rec); renderCards(rec);
-  showToast('ลบรายการสำเร็จ ✓', 'error');
+  rec.capital = (rec.capital||[]).filter(c => c.id !== id);
+  stampEditor(rec);
+  saveAll(); renderCapitalList(rec); renderCards(rec);
+  playTone('delete');
+  showToast('ลบรายการสำเร็จ ✓', 'error', { label:'เลิกทำ', onClick: ()=> restoreRecordSnapshot(snapDate, snapshot) });
 }
 
 /* ---------- accordion ---------- */
@@ -434,63 +664,72 @@ function populatePeriodYears(){
   else{ sel.value = String(new Date(activeDate+'T00:00:00').getFullYear()); }
 }
 
+const DAY_ABBR_EN = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+const MONTH_ABBR_EN = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 function buildPeriodRows(period, refDateStr, year){
   const rows = [];
   if(period === 'day'){
     const rec = records[refDateStr];
     const d = new Date(refDateStr + 'T00:00:00');
-    rows.push({ label: thaiDate(refDateStr), sub: DAY_NAMES_TH[d.getDay()], t: rec ? computeTotals(rec) : null, empty: !rec });
+    rows.push({ label: thaiDate(refDateStr), sub: DAY_NAMES_TH[d.getDay()], pdfLabel: refDateStr+' ('+DAY_ABBR_EN[d.getDay()]+')', t: rec ? computeTotals(rec) : null, empty: !rec });
   } else if(period === 'week'){
     getISOWeekDates(refDateStr).forEach(d=>{
       const key = localDateStr(d);
       const rec = records[key];
-      rows.push({ label: d.getDate()+'/'+(d.getMonth()+1), sub: shortDayName(d), t: rec ? computeTotals(rec) : null, empty: !rec });
+      rows.push({ label: d.getDate()+'/'+(d.getMonth()+1), sub: shortDayName(d), pdfLabel: key+' ('+DAY_ABBR_EN[d.getDay()]+')', t: rec ? computeTotals(rec) : null, empty: !rec });
     });
   } else if(period === 'month'){
     getMonthDates(refDateStr).forEach(d=>{
       const key = localDateStr(d);
       const rec = records[key];
-      rows.push({ label: d.getDate()+' '+MONTH_NAMES_TH[d.getMonth()].slice(0,3), sub: shortDayName(d), t: rec ? computeTotals(rec) : null, empty: !rec });
+      rows.push({ label: d.getDate()+' '+MONTH_NAMES_TH[d.getMonth()].slice(0,3), sub: shortDayName(d), pdfLabel: key+' ('+DAY_ABBR_EN[d.getDay()]+')', t: rec ? computeTotals(rec) : null, empty: !rec });
     });
   } else if(period === 'year'){
     for(let m=0;m<12;m++){
-      let income=0, expense=0, homeExpense=0, change=0, net=0, has=false;
+      let income=0, expense=0, capital=0, change=0, net=0, has=false;
       sortedDates().forEach(key=>{
         const kd = new Date(key+'T00:00:00');
         if(kd.getFullYear() === year && kd.getMonth() === m){
           has = true;
           const t = computeTotals(records[key]);
-          income += t.incomeReal; expense += t.totalExpense; homeExpense += t.totalHomeExpense; change += t.totalChange; net += t.net;
+          income += t.incomeReal; expense += t.totalExpense; capital += t.totalCapital; change += t.totalChange; net += t.net;
         }
       });
-      rows.push({ label: MONTH_NAMES_TH[m], sub: String(year+543), t: has ? {incomeReal:income, totalExpense:expense, totalHomeExpense:homeExpense, totalChange:change, net} : null, empty: !has });
+      rows.push({ label: MONTH_NAMES_TH[m], sub: String(year+543), pdfLabel: year+'-'+String(m+1).padStart(2,'0')+' ('+MONTH_ABBR_EN[m]+')', t: has ? {incomeReal:income, totalExpense:expense, totalCapital:capital, totalChange:change, net} : null, empty: !has });
     }
   }
   return rows;
 }
 
-function renderPeriodRow(r){
+function renderPeriodRow(r, period){
+  const dayTag = period !== 'year' ? ` <span class="period-row-day">${r.sub}</span>` : '';
   if(r.empty){
     return `<div class="period-row empty">
       <div class="period-row-info">
-        <span class="period-row-date">${r.label}</span>
-        <span class="period-row-sub">${r.sub}</span>
+        <span class="period-row-date">${r.label}${dayTag}</span>
       </div>
       <span class="period-row-status">หยุด</span>
     </div>`;
   }
   return `<div class="period-row">
     <div class="period-row-info">
-      <span class="period-row-date">${r.label}</span>
-      <span class="period-row-sub">รับ ${fmtNum(r.t.incomeReal)} · จ่าย ${fmtNum(r.t.totalExpense)} · บ้าน ${fmtNum(r.t.totalHomeExpense)}</span>
+      <span class="period-row-date">${r.label}${dayTag}</span>
+      <span class="period-row-sub">รับ ${fmtNum(r.t.incomeReal)} · จ่าย ${fmtNum(r.t.totalExpense)} · เงินบ้าน ${fmtNum(r.t.totalCapital)}</span>
     </div>
     <span class="period-row-net" style="color:${r.t.net>=0?'var(--income)':'var(--expense)'}">${fmtNum(r.t.net)}</span>
   </div>`;
 }
 
+let currentPeriodView = 'day';
 function renderPeriodSummary(period){
+  currentPeriodView = period;
   const yearWrap = document.getElementById('periodYearWrap');
   yearWrap.hidden = period !== 'year';
+  const dayNav = document.getElementById('periodDayNav');
+  if(dayNav){
+    dayNav.hidden = period !== 'day';
+    if(period === 'day') document.getElementById('periodDayLabel').textContent = thaiDate(activeDate);
+  }
   let year = periodViewYear;
   if(period === 'year'){
     populatePeriodYears();
@@ -499,11 +738,11 @@ function renderPeriodSummary(period){
   }
 
   const rows = buildPeriodRows(period, activeDate, year);
-  let income=0, expense=0, homeExpense=0, change=0, net=0;
-  rows.forEach(r=>{ if(r.t){ income+=r.t.incomeReal; expense+=r.t.totalExpense; homeExpense+=r.t.totalHomeExpense||0; change+=r.t.totalChange; net+=r.t.net; } });
+  let income=0, expense=0, capital=0, change=0, net=0;
+  rows.forEach(r=>{ if(r.t){ income+=r.t.incomeReal; expense+=r.t.totalExpense; capital+=r.t.totalCapital; change+=r.t.totalChange; net+=r.t.net; } });
 
   const unit = period === 'year' ? 'เดือน' : 'วัน';
-  const rowsHtml = rows.map(renderPeriodRow).join('');
+  const rowsHtml = rows.map(r=>renderPeriodRow(r, period)).join('');
   const listWrapHtml = period === 'day'
     ? `<div style="margin-bottom:8px;">${rowsHtml}</div>`
     : `<div class="period-list">${rowsHtml}</div>`;
@@ -513,13 +752,13 @@ function renderPeriodSummary(period){
     ${listWrapHtml}
     <div class="p-line p-income"><span>รายรับรวม (ไม่รวมเงินทอน)</span><span class="p-value">${fmtBaht(income)}</span></div>
     <div class="p-line p-expense"><span>รายจ่ายรวม</span><span class="p-value">${fmtBaht(expense)}</span></div>
-    <div class="p-line p-home"><span>รายจ่ายเงินบ้าน (ต้นทุน)</span><span class="p-value">${fmtBaht(homeExpense)}</span></div>
+    <div class="p-line p-capital"><span>ทุนลงของ, เงินบ้านรวม (ต้นทุน)</span><span class="p-value">${fmtBaht(capital)}</span></div>
     <div class="p-line p-change"><span>เงินทอนรวม (ไม่นับเป็นรายรับ)</span><span class="p-value">${fmtBaht(change)}</span></div>
     <div class="p-line p-net"><span>กำไรสุทธิรวม</span><span class="p-value">${fmtBaht(net)}</span></div>
     <div class="p-meta">มีข้อมูล ${rows.filter(r=>!r.empty).length} จาก ${rows.length} ${unit}</div>
   `;
 
-  currentPeriodExport = { period, year, refDate: activeDate, rows, totals:{income, expense, homeExpense, change, net} };
+  currentPeriodExport = { period, year, refDate: activeDate, rows, totals:{income, expense, capital, change, net} };
 }
 
 /* ---------- search ---------- */
@@ -533,13 +772,8 @@ function runSearch(query){
     const rec = records[dateKey];
     if(dateKey.includes(query)) found.push({dateKey, text:'ข้อมูลของวันที่ ' + dateKey, amount:null});
     rec.expenses.forEach(e=>{
-      if(e.desc.toLowerCase().includes(query) || (e.category||'').toLowerCase().includes(query)){
-        found.push({dateKey, text: e.desc + ' (' + (e.category||'ไม่ระบุหมวดหมู่') + ')', amount: e.amount});
-      }
-    });
-    (rec.homeExpenses||[]).forEach(e=>{
-      if(e.desc.toLowerCase().includes(query)){
-        found.push({dateKey, text: e.desc + ' (รายจ่ายเงินบ้าน)', amount: e.amount});
+      if(e.desc.toLowerCase().includes(query) || e.category.toLowerCase().includes(query)){
+        found.push({dateKey, text: e.desc + ' (' + e.category + ')', amount: e.amount});
       }
     });
   });
@@ -565,38 +799,38 @@ function buildChartBuckets(period){
       const key = localDateStr(d);
       const rec = records[key] || emptyRecord(key);
       const t = computeTotals(rec);
-      buckets.push({label:(d.getDate()+'/'+(d.getMonth()+1)), income:t.incomeReal, expense:t.totalExpense, home:t.totalHomeExpense});
+      buckets.push({label:(d.getDate()+'/'+(d.getMonth()+1)), income:t.incomeReal, expense:t.totalExpense});
     }
   } else if(period === 'week'){
     for(let i=7;i>=0;i--){
       const d = new Date(active); d.setDate(d.getDate() - i*7);
       const wk = getISOWeekKey(d);
-      let income=0, expense=0, home=0;
+      let income=0, expense=0;
       sortedDates().forEach(key=>{
         const kd = new Date(key+'T00:00:00');
-        if(getISOWeekKey(kd) === wk){ const t = computeTotals(records[key]); income+=t.incomeReal; expense+=t.totalExpense; home+=t.totalHomeExpense; }
+        if(getISOWeekKey(kd) === wk){ const t = computeTotals(records[key]); income+=t.incomeReal; expense+=t.totalExpense; }
       });
-      buckets.push({label:'W'+wk.split('-W')[1], income, expense, home});
+      buckets.push({label:'W'+wk.split('-W')[1], income, expense});
     }
   } else if(period === 'month'){
     for(let i=11;i>=0;i--){
       const d = new Date(active.getFullYear(), active.getMonth()-i, 1);
-      let income=0, expense=0, home=0;
+      let income=0, expense=0;
       sortedDates().forEach(key=>{
         const kd = new Date(key+'T00:00:00');
-        if(kd.getFullYear()===d.getFullYear() && kd.getMonth()===d.getMonth()){ const t = computeTotals(records[key]); income+=t.incomeReal; expense+=t.totalExpense; home+=t.totalHomeExpense; }
+        if(kd.getFullYear()===d.getFullYear() && kd.getMonth()===d.getMonth()){ const t = computeTotals(records[key]); income+=t.incomeReal; expense+=t.totalExpense; }
       });
-      buckets.push({label:MONTH_NAMES_TH[d.getMonth()].slice(0,3), income, expense, home});
+      buckets.push({label:MONTH_NAMES_TH[d.getMonth()].slice(0,3), income, expense});
     }
   } else if(period === 'year'){
     for(let i=4;i>=0;i--){
       const y = active.getFullYear() - i;
-      let income=0, expense=0, home=0;
+      let income=0, expense=0;
       sortedDates().forEach(key=>{
         const kd = new Date(key+'T00:00:00');
-        if(kd.getFullYear()===y){ const t = computeTotals(records[key]); income+=t.incomeReal; expense+=t.totalExpense; home+=t.totalHomeExpense; }
+        if(kd.getFullYear()===y){ const t = computeTotals(records[key]); income+=t.incomeReal; expense+=t.totalExpense; }
       });
-      buckets.push({label:String(y+543), income, expense, home});
+      buckets.push({label:String(y+543), income, expense});
     }
   }
   return buckets;
@@ -608,26 +842,39 @@ function renderChart(){
   const ctx = canvas.getContext('2d');
   const W = canvas.width, H = canvas.height;
   ctx.clearRect(0,0,W,H);
+
+  const legendDefault = document.getElementById('chartLegendDefault');
+  const legendCategory = document.getElementById('chartLegendCategory');
+
+  if(chartType === 'category'){
+    legendDefault.hidden = true;
+    legendCategory.hidden = false;
+    const catData = buildCategoryBreakdown(chartPeriod);
+    drawCategoryChart(ctx, W, H, catData);
+    renderCategoryLegend(catData);
+    return;
+  }
+  legendDefault.hidden = false;
+  legendCategory.hidden = true;
+
   const buckets = buildChartBuckets(chartPeriod);
 
   const totalIncome = buckets.reduce((s,b)=>s+b.income,0);
   const totalExpense = buckets.reduce((s,b)=>s+b.expense,0);
-  const totalHome = buckets.reduce((s,b)=>s+b.home,0);
   document.getElementById('legendIncome').textContent = fmtBaht(totalIncome);
   document.getElementById('legendExpense').textContent = fmtBaht(totalExpense);
-  document.getElementById('legendHome').textContent = fmtBaht(totalHome);
 
   if(chartType === 'bar') drawBarChart(ctx, W, H, buckets);
   else if(chartType === 'line') drawLineChart(ctx, W, H, buckets);
-  else if(chartType === 'pie') drawPieChart(ctx, W, H, totalIncome, totalExpense, totalHome);
+  else if(chartType === 'pie') drawPieChart(ctx, W, H, totalIncome, totalExpense);
 }
 function drawBarChart(ctx, W, H, buckets){
-  const maxVal = Math.max(1, ...buckets.map(d=>Math.max(d.income,d.expense,d.home)));
+  const maxVal = Math.max(1, ...buckets.map(d=>Math.max(d.income,d.expense)));
   const padding = 36;
   const chartW = W - padding*2;
   const chartH = H - padding*2;
   const groupW = chartW / buckets.length;
-  const barW = Math.min(18, groupW * 0.22);
+  const barW = Math.min(26, groupW * 0.32);
 
   ctx.strokeStyle = 'rgba(47,111,237,0.2)';
   ctx.beginPath(); ctx.moveTo(padding, H-padding); ctx.lineTo(W-padding, H-padding); ctx.stroke();
@@ -636,13 +883,10 @@ function drawBarChart(ctx, W, H, buckets){
     const x = padding + i*groupW + groupW/2;
     const incomeH = (d.income/maxVal) * chartH;
     const expenseH = (d.expense/maxVal) * chartH;
-    const homeH = (d.home/maxVal) * chartH;
     ctx.fillStyle = '#0EA968';
-    ctx.fillRect(x - barW*1.5 - 3, H-padding-incomeH, barW, incomeH);
+    ctx.fillRect(x - barW - 2, H-padding-incomeH, barW, incomeH);
     ctx.fillStyle = '#E23744';
-    ctx.fillRect(x - barW/2, H-padding-expenseH, barW, expenseH);
-    ctx.fillStyle = '#7C4FE0';
-    ctx.fillRect(x + barW/2 + 3, H-padding-homeH, barW, homeH);
+    ctx.fillRect(x + 2, H-padding-expenseH, barW, expenseH);
     ctx.fillStyle = '#52627A';
     ctx.font = '10.5px IBM Plex Sans Thai, sans-serif';
     ctx.textAlign = 'center';
@@ -650,7 +894,7 @@ function drawBarChart(ctx, W, H, buckets){
   });
 }
 function drawLineChart(ctx, W, H, buckets){
-  const maxVal = Math.max(1, ...buckets.map(d=>Math.max(d.income,d.expense,d.home)));
+  const maxVal = Math.max(1, ...buckets.map(d=>Math.max(d.income,d.expense)));
   const padding = 36;
   const chartW = W - padding*2;
   const chartH = H - padding*2;
@@ -676,7 +920,6 @@ function drawLineChart(ctx, W, H, buckets){
   }
   drawSeries('income', '#0EA968');
   drawSeries('expense', '#E23744');
-  drawSeries('home', '#7C4FE0');
 
   ctx.fillStyle = '#52627A';
   ctx.font = '10.5px IBM Plex Sans Thai, sans-serif';
@@ -686,9 +929,9 @@ function drawLineChart(ctx, W, H, buckets){
     ctx.fillText(d.label, x, H-padding+16);
   });
 }
-function drawPieChart(ctx, W, H, totalIncome, totalExpense, totalHome){
+function drawPieChart(ctx, W, H, totalIncome, totalExpense){
   const cx = W/2, cy = H/2 - 10, r = Math.min(W,H)/2 - 50;
-  const total = totalIncome + totalExpense + totalHome;
+  const total = totalIncome + totalExpense;
   if(total <= 0){
     ctx.fillStyle = '#52627A';
     ctx.font = '13px IBM Plex Sans Thai, sans-serif';
@@ -696,30 +939,114 @@ function drawPieChart(ctx, W, H, totalIncome, totalExpense, totalHome){
     ctx.fillText('ยังไม่มีข้อมูลในช่วงนี้', cx, cy);
     return;
   }
-  const slices = [
-    { value: totalIncome, color: '#0EA968' },
-    { value: totalExpense, color: '#E23744' },
-    { value: totalHome, color: '#7C4FE0' }
-  ];
-  let angle = -Math.PI/2;
-  slices.forEach(s=>{
-    const sweep = (s.value/total) * Math.PI * 2;
-    ctx.beginPath();
-    ctx.moveTo(cx,cy);
-    ctx.arc(cx, cy, r, angle, angle + sweep);
-    ctx.closePath();
-    ctx.fillStyle = s.color;
-    ctx.fill();
-    if(s.value > 0){
-      const mid = angle + sweep/2;
-      const pct = Math.round((s.value/total)*100);
-      ctx.fillStyle = '#fff';
-      ctx.font = 'bold 13px IBM Plex Sans Thai, sans-serif';
-      ctx.textAlign = 'center';
-      ctx.fillText(pct+'%', cx + Math.cos(mid)*r*0.6, cy + Math.sin(mid)*r*0.6);
-    }
-    angle += sweep;
+  const incomeAngle = (totalIncome/total) * Math.PI * 2;
+  ctx.beginPath();
+  ctx.moveTo(cx,cy);
+  ctx.arc(cx, cy, r, -Math.PI/2, -Math.PI/2 + incomeAngle);
+  ctx.closePath();
+  ctx.fillStyle = '#0EA968';
+  ctx.fill();
+
+  ctx.beginPath();
+  ctx.moveTo(cx,cy);
+  ctx.arc(cx, cy, r, -Math.PI/2 + incomeAngle, -Math.PI/2 + Math.PI*2);
+  ctx.closePath();
+  ctx.fillStyle = '#E23744';
+  ctx.fill();
+
+  // percentage labels
+  ctx.fillStyle = '#fff';
+  ctx.font = 'bold 13px IBM Plex Sans Thai, sans-serif';
+  ctx.textAlign = 'center';
+  const incomePct = Math.round((totalIncome/total)*100);
+  const expensePct = 100 - incomePct;
+  const midIncomeAngle = -Math.PI/2 + incomeAngle/2;
+  const midExpenseAngle = -Math.PI/2 + incomeAngle + (Math.PI*2 - incomeAngle)/2;
+  if(totalIncome > 0){
+    ctx.fillText(incomePct+'%', cx + Math.cos(midIncomeAngle)*r*0.6, cy + Math.sin(midIncomeAngle)*r*0.6);
+  }
+  if(totalExpense > 0){
+    ctx.fillText(expensePct+'%', cx + Math.cos(midExpenseAngle)*r*0.6, cy + Math.sin(midExpenseAngle)*r*0.6);
+  }
+}
+
+/* ---------- chart: expense breakdown by category ---------- */
+const CATEGORY_PALETTE = ['#E23744','#2F6FED','#0EA968','#C98A0E','#7C4FE0','#E0578A','#2BB6C4','#F2994A','#8D6E63','#5D6D7E'];
+function buildCategoryBreakdown(period){
+  const filtered = filterByPeriod(period, activeDate);
+  const totals = {};
+  filtered.forEach(rec=>{
+    rec.expenses.forEach(e=>{
+      const cat = e.category && e.category.trim() ? e.category.trim() : 'ไม่ระบุ';
+      totals[cat] = (totals[cat] || 0) + (e.amount || 0);
+    });
   });
+  const entries = Object.entries(totals).sort((a,b)=> b[1]-a[1]);
+  const grand = entries.reduce((s,[,v])=> s+v, 0);
+  return entries.map(([name, amount], i)=> ({
+    name, amount,
+    pct: grand ? (amount/grand*100) : 0,
+    color: CATEGORY_PALETTE[i % CATEGORY_PALETTE.length]
+  }));
+}
+function truncateLabel(s, n){ return s.length > n ? s.slice(0, n-1) + '…' : s; }
+function roundRectPath(ctx, x, y, w, h, r){
+  const rr = Math.min(r, h/2, Math.max(w,0.01)/2);
+  ctx.beginPath();
+  ctx.moveTo(x+rr, y);
+  ctx.arcTo(x+w, y, x+w, y+h, rr);
+  ctx.arcTo(x+w, y+h, x, y+h, rr);
+  ctx.arcTo(x, y+h, x, y, rr);
+  ctx.arcTo(x, y, x+w, y, rr);
+  ctx.closePath();
+}
+function drawCategoryChart(ctx, W, H, data){
+  if(!data.length){
+    ctx.fillStyle = '#52627A';
+    ctx.font = '13px IBM Plex Sans Thai, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('ยังไม่มีรายจ่ายในช่วงนี้', W/2, H/2);
+    return;
+  }
+  const maxVal = Math.max(...data.map(d=>d.amount));
+  const rowH = Math.min(34, (H-20) / data.length);
+  const padLeft = 92, padRight = 74;
+  const barMaxW = W - padLeft - padRight;
+
+  data.forEach((d,i)=>{
+    const y = 12 + i*rowH;
+    const barH = rowH * 0.5;
+    const barY = y + (rowH-barH)/2;
+
+    ctx.fillStyle = '#0F1B2D';
+    ctx.font = '11px IBM Plex Sans Thai, sans-serif';
+    ctx.textAlign = 'right';
+    ctx.fillText(truncateLabel(d.name, 11), padLeft-8, y + rowH*0.62);
+
+    const barW = maxVal ? Math.max((d.amount/maxVal) * barMaxW, 3) : 3;
+    ctx.fillStyle = d.color;
+    roundRectPath(ctx, padLeft, barY, barW, barH, 6);
+    ctx.fill();
+
+    ctx.fillStyle = '#52627A';
+    ctx.textAlign = 'left';
+    ctx.font = '10px IBM Plex Mono, monospace';
+    ctx.fillText(fmtNum(d.amount), padLeft + barW + 8, y + rowH*0.62);
+  });
+}
+function renderCategoryLegend(data){
+  const el = document.getElementById('chartLegendCategory');
+  if(!data.length){
+    el.innerHTML = '<div class="cat-legend-empty">ไม่มีข้อมูลรายจ่ายในช่วงนี้</div>';
+    return;
+  }
+  el.innerHTML = data.map(d => `
+    <div class="cat-legend-item">
+      <span class="cat-dot" style="background:${d.color}"></span>
+      <span class="cat-name">${escapeHtml(d.name)}</span>
+      <span class="cat-amount">${fmtBaht(d.amount)}</span>
+      <span class="cat-pct">${d.pct.toFixed(0)}%</span>
+    </div>`).join('');
 }
 
 /* ---------- history panel ---------- */
@@ -750,10 +1077,14 @@ function renderHistoryList(){
     const t = computeTotals(rec);
     const div = document.createElement('div');
     div.className = 'history-item';
+    const editedLine = rec.lastEditedBy
+      ? `<span class="hist-editor">✏️ แก้ไขล่าสุดโดย ${rec.lastEditedBy}</span>`
+      : '';
     div.innerHTML = `
       <div class="hist-info">
         <span class="hist-date">${dateKey}</span>
-        <span class="hist-sub">รับ ${fmtNum(t.totalIncome)} · จ่าย ${fmtNum(t.totalExpense)} · บ้าน ${fmtNum(t.totalHomeExpense)}</span>
+        <span class="hist-sub">รับ ${fmtNum(t.totalIncome)} · จ่าย ${fmtNum(t.totalExpense)}</span>
+        ${editedLine}
       </div>
       <div class="hist-actions">
         <span class="hist-net" style="color:${t.net>=0?'#0EA968':'#E23744'}">${fmtNum(t.net)}</span>
@@ -766,20 +1097,21 @@ function renderHistoryList(){
 
 /* ---------- export: CSV ---------- */
 function buildCsvRows(){
-  const rows = [['date','income_note','income_coin','income_app','home_expense_desc','home_expense_amount','expense_desc','expense_category','expense_amount','change_coin','change_note']];
+  const rows = [['date','income_note','income_coin','income_app','expense_desc','expense_category','expense_amount','change_coin','change_note','edited_by']];
   sortedDates().forEach(dateKey=>{
     const rec = records[dateKey];
-    const maxLen = Math.max(rec.expenses.length, (rec.homeExpenses||[]).length, 1);
-    for(let idx=0; idx<maxLen; idx++){
-      const e = rec.expenses[idx];
-      const he = (rec.homeExpenses||[])[idx];
-      rows.push([
-        dateKey,
-        idx===0?rec.income.note:'', idx===0?rec.income.coin:'', idx===0?rec.income.app:'',
-        he ? he.desc : '', he ? he.amount : '',
-        e ? e.desc : '', e ? e.category : '', e ? e.amount : '',
-        idx===0?rec.change.coin:'', idx===0?rec.change.note:''
-      ]);
+    const editedBy = rec.lastEditedBy || '';
+    if(rec.expenses.length === 0){
+      rows.push([dateKey, rec.income.note, rec.income.coin, rec.income.app, '', '', '', rec.change.coin, rec.change.note, editedBy]);
+    }else{
+      rec.expenses.forEach((e, idx)=>{
+        rows.push([
+          dateKey, idx===0?rec.income.note:'', idx===0?rec.income.coin:'', idx===0?rec.income.app:'',
+          e.desc, e.category, e.amount,
+          idx===0?rec.change.coin:'', idx===0?rec.change.note:'',
+          idx===0?editedBy:(e.by||'')
+        ]);
+      });
     }
   });
   return rows;
@@ -826,11 +1158,13 @@ async function importJsonFile(file){
   const count = Object.keys(incoming).length;
   const ok = await confirmAction('ยืนยันคืนค่าข้อมูล', `พบข้อมูล ${count} วันในไฟล์ ต้องการรวม/อัปเดตทับข้อมูลปัจจุบันหรือไม่?`);
   if(!ok) return;
+  const fullSnapshot = snapshotAllRecords();
   Object.keys(incoming).forEach(key=>{ records[key] = incoming[key]; });
   saveAll();
   populateHistoryYears();
   renderForm();
-  showToast('คืนค่าข้อมูลสำเร็จ ✓', 'success');
+  playTone('success');
+  showToast('คืนค่าข้อมูลสำเร็จ ✓', 'success', { label:'เลิกทำ', onClick: ()=> restoreAllRecords(fullSnapshot) });
 }
 
 /* ---------- export: PDF ---------- */
@@ -853,8 +1187,7 @@ function exportPdfDay(){
     ['Total change', t.totalChange],
     ['Real income (income - change)', t.incomeReal],
     ['Total expenses', t.totalExpense],
-    ['Home/capital expenses (deducted from profit)', t.totalHomeExpense],
-    ['Net profit for the day', t.net],
+    ['Net for the day', t.net],
   ];
   lines.forEach(([label, val])=>{
     doc.text(String(label), 14, y);
@@ -872,16 +1205,12 @@ function exportPdfDay(){
       y += 7;
     });
   }
-  if(rec.homeExpenses && rec.homeExpenses.length){
-    y += 4;
-    doc.setFontSize(12);
-    doc.text('Home/capital expense items:', 14, y); y += 8;
-    doc.setFontSize(10);
-    rec.homeExpenses.forEach(e=>{
-      doc.text(e.desc, 14, y);
-      doc.text(Number(e.amount).toLocaleString('en-US', {minimumFractionDigits:2}), 180, y, {align:'right'});
-      y += 7;
-    });
+  if(rec.lastEditedBy){
+    y += 6;
+    doc.setFontSize(9);
+    doc.setTextColor(120);
+    doc.text(`Last edited by: ${rec.lastEditedBy}`, 14, y);
+    doc.setTextColor(0);
   }
   doc.save(`daily-summary-${activeDate}.pdf`);
   showToast('ส่งออก PDF ใบสรุปรายวันสำเร็จ ✓', 'success');
@@ -894,11 +1223,11 @@ function exportPdfPeriod(){
   doc.text('Period Report (Monthly)', 14, 18);
   const rows = filtered.map(rec=>{
     const t = computeTotals(rec);
-    return [rec.date, t.incomeReal.toFixed(2), t.totalExpense.toFixed(2), t.totalHomeExpense.toFixed(2), t.totalChange.toFixed(2), t.net.toFixed(2)];
+    return [rec.date, t.incomeReal.toFixed(2), t.totalExpense.toFixed(2), t.totalChange.toFixed(2), t.net.toFixed(2)];
   });
   doc.autoTable({
     startY: 26,
-    head: [['Date','Real Income','Expense','Home/Capital','Change','Net Profit']],
+    head: [['Date','Real Income','Expense','Change','Net']],
     body: rows,
     styles: { fontSize: 9 }
   });
@@ -916,39 +1245,121 @@ function periodExportFilenameBase(){
   if(period === 'year') return `รายงานปี-${year+543}`;
   return 'รายงาน';
 }
+
+/* dates covered by the currently displayed Σ period, for building itemized detail rows */
+function periodDateKeys(period, refDateStr, year){
+  if(period === 'day') return [refDateStr];
+  if(period === 'week') return getISOWeekDates(refDateStr).map(localDateStr);
+  if(period === 'month') return getMonthDates(refDateStr).map(localDateStr);
+  if(period === 'year') return sortedDates().filter(k => new Date(k+'T00:00:00').getFullYear() === year);
+  return [];
+}
+/* every expense + capital line item across those dates — [date, type, desc, category, amount] */
+function collectPeriodDetailRows(period, refDateStr, year){
+  const details = [];
+  periodDateKeys(period, refDateStr, year).sort().forEach(key=>{
+    const rec = records[key];
+    if(!rec) return;
+    (rec.expenses||[]).forEach(e=> details.push([key, 'รายจ่าย', e.desc, e.category||'-', Number(e.amount||0).toFixed(2)]));
+    (rec.capital||[]).forEach(c=> details.push([key, 'ทุนลงของ/เงินบ้าน', c.desc, '-', Number(c.amount||0).toFixed(2)]));
+  });
+  return details;
+}
+
+/* Thai font for jsPDF — its built-in fonts have no Thai glyphs, so item names (which are
+   Thai text the user typed) would show as garbled boxes without this. Fetched once and
+   cached; if the device is offline the fetch fails quietly and PDFs fall back to the
+   default font (Thai item names may not render, but numbers/dates still do). */
+let thaiPdfFontBase64 = null;
+let thaiPdfFontFailed = false;
+async function loadThaiPdfFont(){
+  if(thaiPdfFontBase64 || thaiPdfFontFailed) return thaiPdfFontBase64;
+  try{
+    const res = await fetch('https://cdn.jsdelivr.net/gh/google/fonts@main/ofl/sarabun/Sarabun-Regular.ttf');
+    const buf = await res.arrayBuffer();
+    const bytes = new Uint8Array(buf);
+    let binary = '';
+    const chunk = 0x8000;
+    for(let i=0;i<bytes.length;i+=chunk){ binary += String.fromCharCode.apply(null, bytes.subarray(i, i+chunk)); }
+    thaiPdfFontBase64 = btoa(binary);
+  }catch(err){
+    thaiPdfFontFailed = true;
+  }
+  return thaiPdfFontBase64;
+}
+async function applyThaiFont(doc){
+  const b64 = await loadThaiPdfFont();
+  if(!b64) return undefined;
+  doc.addFileToVFS('Sarabun-Regular.ttf', b64);
+  doc.addFont('Sarabun-Regular.ttf', 'Sarabun', 'normal');
+  doc.setFont('Sarabun');
+  return 'Sarabun';
+}
+
 function exportPeriodExcel(){
   if(!currentPeriodExport){ showToast('ยังไม่มีข้อมูลสรุปให้ดาวน์โหลด', 'error'); return; }
-  const { rows, totals } = currentPeriodExport;
-  const header = ['วันที่ / เดือน','สถานะ','รายรับแท้จริง','รายจ่าย','รายจ่ายเงินบ้าน','เงินทอน','กำไรสุทธิ'];
+  const { period, refDate, year, rows, totals } = currentPeriodExport;
+  const header = ['วันที่ / เดือน','สถานะ','รายรับแท้จริง','รายจ่าย','เงินบ้าน (ทุน)','เงินทอน','กำไรสุทธิ'];
   const body = rows.map(r => r.empty
     ? [r.label, 'หยุด', '', '', '', '', '']
-    : [r.label, '', r.t.incomeReal.toFixed(2), r.t.totalExpense.toFixed(2), (r.t.totalHomeExpense||0).toFixed(2), r.t.totalChange.toFixed(2), r.t.net.toFixed(2)]
+    : [r.label, '', r.t.incomeReal.toFixed(2), r.t.totalExpense.toFixed(2), r.t.totalCapital.toFixed(2), r.t.totalChange.toFixed(2), r.t.net.toFixed(2)]
   );
-  const sheetRows = [header, ...body, [], ['รวมทั้งหมด', '', totals.income.toFixed(2), totals.expense.toFixed(2), (totals.homeExpense||0).toFixed(2), totals.change.toFixed(2), totals.net.toFixed(2)]];
+  const sheetRows = [header, ...body, [], ['รวมทั้งหมด', '', totals.income.toFixed(2), totals.expense.toFixed(2), totals.capital.toFixed(2), totals.change.toFixed(2), totals.net.toFixed(2)]];
   const ws = XLSX.utils.aoa_to_sheet(sheetRows);
   const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, ws, 'รายงาน');
+  XLSX.utils.book_append_sheet(wb, ws, 'สรุปยอดรวม');
+
+  // second sheet: every line item (what was bought / paid) across the period, for audit detail
+  const detailRows = collectPeriodDetailRows(period, refDate, year);
+  const detailHeader = ['วันที่','ประเภท','รายการ','หมวดหมู่','จำนวนเงิน'];
+  const wsDetail = XLSX.utils.aoa_to_sheet([detailHeader, ...detailRows]);
+  XLSX.utils.book_append_sheet(wb, wsDetail, 'รายละเอียดรายการ');
+
   XLSX.writeFile(wb, periodExportFilenameBase() + '.xlsx');
   showToast('ดาวน์โหลดรายงาน Excel สำเร็จ ✓', 'success');
 }
-function exportPeriodPdf(){
+async function exportPeriodPdf(){
   if(!currentPeriodExport){ showToast('ยังไม่มีข้อมูลสรุปให้ดาวน์โหลด', 'error'); return; }
-  const { rows, totals } = currentPeriodExport;
+  const { period, refDate, rows, totals } = currentPeriodExport;
   const { jsPDF } = window.jspdf;
   const doc = new jsPDF();
   doc.setFontSize(15);
   doc.text('Period Report', 14, 18);
+  // NOTE: jsPDF's built-in font can't render Thai glyphs (they'd show as garbled boxes),
+  // so the summary table always uses plain dates + English day/month abbreviations (r.pdfLabel)
+  // instead of the Thai labels shown on-screen (r.label) — this part stays robust even offline.
   const body = rows.map(r => r.empty
-    ? [r.label, 'Closed', '-', '-', '-', '-', '-']
-    : [r.label, '', r.t.incomeReal.toFixed(2), r.t.totalExpense.toFixed(2), (r.t.totalHomeExpense||0).toFixed(2), r.t.totalChange.toFixed(2), r.t.net.toFixed(2)]
+    ? [r.pdfLabel, 'Closed', '-', '-', '-', '-', '-']
+    : [r.pdfLabel, '', r.t.incomeReal.toFixed(2), r.t.totalExpense.toFixed(2), r.t.totalCapital.toFixed(2), r.t.totalChange.toFixed(2), r.t.net.toFixed(2)]
   );
   doc.autoTable({
     startY: 26,
-    head: [['Date','Status','Real Income','Expense','Home/Capital','Change','Net Profit']],
+    head: [['Date','Status','Real Income','Expense','House cost','Change','Net profit']],
     body: body,
-    foot: [['Total','', totals.income.toFixed(2), totals.expense.toFixed(2), (totals.homeExpense||0).toFixed(2), totals.change.toFixed(2), totals.net.toFixed(2)]],
+    foot: [['Total','', totals.income.toFixed(2), totals.expense.toFixed(2), totals.capital.toFixed(2), totals.change.toFixed(2), totals.net.toFixed(2)]],
     styles: { fontSize: 8 }
   });
+
+  // day view only: itemize what was actually bought/paid that day (names are Thai, so this
+  // needs the embedded Thai font — best-effort, requires a network connection once to fetch it)
+  if(period === 'day'){
+    const rec = records[refDate];
+    const items = rec ? [
+      ...(rec.expenses||[]).map(e=>['รายจ่าย', e.desc, e.category||'-', Number(e.amount||0).toFixed(2)]),
+      ...(rec.capital||[]).map(c=>['ทุนลงของ/เงินบ้าน', c.desc, '-', Number(c.amount||0).toFixed(2)]),
+    ] : [];
+    if(items.length){
+      const thaiFont = await applyThaiFont(doc);
+      doc.autoTable({
+        startY: doc.lastAutoTable.finalY + 10,
+        head: [['ประเภท','รายการ','หมวดหมู่','จำนวนเงิน']],
+        body: items,
+        styles: { fontSize: 9, ...(thaiFont ? {font: thaiFont} : {}) },
+        headStyles: thaiFont ? {font: thaiFont} : undefined
+      });
+    }
+  }
+
   doc.save(periodExportFilenameBase() + '.pdf');
   showToast('ดาวน์โหลดรายงาน PDF สำเร็จ ✓', 'success');
 }
@@ -986,10 +1397,12 @@ async function importCsvFile(file){
   const mode = await chooseImportMode(
     'นำเข้าข้อมูล CSV',
     `พบข้อมูล <b>${affectedDates.size} วัน</b> ในไฟล์<br><br>
-     <b>➕ รวมข้อมูล</b> — เก็บข้อมูลเดิมไว้ รายรับ/เงินทอนจะถูกบวกเพิ่มจากของเดิม รายจ่าย/รายจ่ายเงินบ้านจะถูกเพิ่มต่อท้าย<br><br>
+     <b>➕ รวมข้อมูล</b> — เก็บข้อมูลเดิมไว้ รายรับ/เงินทอนจะถูกบวกเพิ่มจากของเดิม รายจ่ายจะถูกเพิ่มต่อท้าย<br><br>
      <b>♻️ บันทึกทับ</b> — ลบข้อมูลเดิมของวันที่ตรงกันออกก่อน แล้วใส่ข้อมูลจาก CSV แทนทั้งหมด (ป้องกันรายการซ้ำเวลานำเข้าไฟล์เดิมซ้ำ)`
   );
   if(!mode) return;
+
+  const fullSnapshot = snapshotAllRecords();
 
   if(mode === 'overwrite'){
     affectedDates.forEach(d=>{ records[d] = emptyRecord(d); });
@@ -997,7 +1410,7 @@ async function importCsvFile(file){
 
   lastDate = null;
   rows.forEach(cols=>{
-    const [date, incNote, incCoin, incApp, homeDesc, homeAmt, expDesc, expCat, expAmt, chCoin, chNote] = cols;
+    const [date, incNote, incCoin, incApp, expDesc, expCat, expAmt, chCoin, chNote] = cols;
     const d = date && date.trim() ? date.trim() : lastDate;
     if(!d) return;
     lastDate = d;
@@ -1018,16 +1431,15 @@ async function importCsvFile(file){
     if(expDesc && expDesc.trim()){
       rec.expenses.push({ id: uid(), desc: expDesc.trim(), category:(expCat||'ไม่ระบุ').trim(), amount: parseFloat(expAmt)||0 });
     }
-    if(homeDesc && homeDesc.trim()){
-      rec.homeExpenses.push({ id: uid(), desc: homeDesc.trim(), amount: parseFloat(homeAmt)||0 });
-    }
   });
   saveAll();
   populateHistoryYears();
   renderForm();
+  playTone('success');
   showToast(
     mode === 'overwrite' ? `นำเข้า CSV สำเร็จ ✓ บันทึกทับ ${affectedDates.size} วันแล้ว` : `นำเข้า CSV สำเร็จ ✓ รวมข้อมูล ${affectedDates.size} วันแล้ว`,
-    'success'
+    'success',
+    { label:'เลิกทำ', onClick: ()=> restoreAllRecords(fullSnapshot) }
   );
 }
 
@@ -1045,8 +1457,16 @@ function saveTitle(){
 
 /* ---------- events ---------- */
 document.addEventListener('DOMContentLoaded', ()=>{
-  loadAll();
+  wireAuthUI();
+});
+
+function startApp(){
+  if(appStarted) return; // guard against double init if auth state fires more than once
+  appStarted = true;
+
   loadTitle();
+  initTheme();
+  initSound();
   initAccordion();
   renderForm();
   populateHistoryYears();
@@ -1060,20 +1480,37 @@ document.addEventListener('DOMContentLoaded', ()=>{
   document.getElementById('activeDate').addEventListener('change', (e)=>{
     activeDate = e.target.value || todayStr();
     renderForm(); refreshOpenCardHeight();
+    renderPeriodSummary(currentPeriodView); refreshOpenCardHeight();
   });
   document.getElementById('dateBack').addEventListener('click', ()=>{
     const d = new Date(activeDate + 'T00:00:00'); d.setDate(d.getDate()-1);
     activeDate = localDateStr(d);
     renderForm(); refreshOpenCardHeight();
+    renderPeriodSummary(currentPeriodView); refreshOpenCardHeight();
   });
   document.getElementById('dateFwd').addEventListener('click', ()=>{
     const d = new Date(activeDate + 'T00:00:00'); d.setDate(d.getDate()+1);
     activeDate = localDateStr(d);
     renderForm(); refreshOpenCardHeight();
+    renderPeriodSummary(currentPeriodView); refreshOpenCardHeight();
   });
   document.getElementById('dateToday').addEventListener('click', ()=>{
     activeDate = todayStr();
     renderForm(); refreshOpenCardHeight();
+    renderPeriodSummary(currentPeriodView); refreshOpenCardHeight();
+  });
+  // mini day-nav inside the Σ summary card — lets you browse days without scrolling back to the top date picker
+  document.getElementById('periodDayBack').addEventListener('click', ()=>{
+    const d = new Date(activeDate + 'T00:00:00'); d.setDate(d.getDate()-1);
+    activeDate = localDateStr(d);
+    renderForm(); refreshOpenCardHeight();
+    renderPeriodSummary('day'); refreshOpenCardHeight();
+  });
+  document.getElementById('periodDayFwd').addEventListener('click', ()=>{
+    const d = new Date(activeDate + 'T00:00:00'); d.setDate(d.getDate()+1);
+    activeDate = localDateStr(d);
+    renderForm(); refreshOpenCardHeight();
+    renderPeriodSummary('day'); refreshOpenCardHeight();
   });
 
   document.querySelectorAll('[data-save]').forEach(btn=>{
@@ -1092,11 +1529,10 @@ document.addEventListener('DOMContentLoaded', ()=>{
     const id = e.target.getAttribute('data-del');
     if(id) deleteExpense(id);
   });
-
-  document.getElementById('addHomeExpenseBtn').addEventListener('click', addHomeExpense);
-  document.getElementById('homeExpenseList').addEventListener('click', (e)=>{
-    const id = e.target.getAttribute('data-del-home');
-    if(id) deleteHomeExpense(id);
+  document.getElementById('addCapitalBtn').addEventListener('click', addCapital);
+  document.getElementById('capitalList').addEventListener('click', (e)=>{
+    const id = e.target.getAttribute('data-delcap');
+    if(id) deleteCapital(id);
   });
 
   // tap to toggle zoom — stays zoomed until tapped again
@@ -1198,14 +1634,19 @@ document.addEventListener('DOMContentLoaded', ()=>{
       document.getElementById('historyPanel').classList.remove('open');
     }
     if(delDate){
-      const ok = await confirmAction('ยืนยันการลบ', `ต้องการลบข้อมูลทั้งหมดของวันที่ ${delDate} ใช่หรือไม่? การลบไม่สามารถย้อนกลับได้`);
+      const ok = await confirmAction('ยืนยันการลบ', `ต้องการลบข้อมูลทั้งหมดของวันที่ ${delDate} ใช่หรือไม่?`);
       if(!ok) return;
+      const snapshot = snapshotRecord(delDate);
       delete records[delDate];
       saveAll();
       renderHistoryList();
       populateHistoryYears();
       if(delDate === activeDate){ renderForm(); refreshOpenCardHeight(); }
-      showToast('ลบข้อมูลสำเร็จ ✓', 'error');
+      playTone('delete');
+      showToast('ลบข้อมูลสำเร็จ ✓', 'error', { label:'เลิกทำ', onClick: ()=>{
+        restoreRecordSnapshot(delDate, snapshot);
+        renderHistoryList();
+      }});
     }
   });
 
@@ -1220,4 +1661,11 @@ document.addEventListener('DOMContentLoaded', ()=>{
       if(e.target === panel) panel.classList.remove('open');
     });
   });
-});
+}
+
+/* ---------- PWA: register service worker (offline app shell) ---------- */
+if('serviceWorker' in navigator){
+  window.addEventListener('load', ()=>{
+    navigator.serviceWorker.register('sw.js').catch(()=>{ /* offline support unavailable — app still works online */ });
+  });
+}
